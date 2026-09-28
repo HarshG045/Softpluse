@@ -40,6 +40,10 @@ class ComponentRiskProfile:
     in_degree: int = 0
     out_degree: int = 0
 
+    @property
+    def component_name(self) -> str:
+        return self.filepath.replace("\\", "/").split("/")[-1]
+
     def to_dict(self) -> Dict:
         return {
             "filepath": self.filepath,

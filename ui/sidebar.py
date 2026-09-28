@@ -18,6 +18,7 @@ class NavigationPage(str, Enum):
     RISK_EXPLORER = "Risk Explorer"
     ARCHITECTURE = "Architecture"
     EVOLUTION = "Evolution"
+    GIT_ACTIVITY = "Git Activity"
     DEPENDENCIES = "Dependencies"
     EXPLAINABILITY = "Explainability"
     WHAT_IF_LAB = "What-If Lab"
@@ -27,17 +28,13 @@ class NavigationPage(str, Enum):
 
 NAV_SECTIONS = [
     {
-        "header": "WORKSPACE",
-        "items": [
-            {"id": NavigationPage.OVERVIEW, "label": "Overview", "icon": "▣"}
-        ]
-    },
-    {
         "header": "ANALYSIS",
         "items": [
+            {"id": NavigationPage.OVERVIEW, "label": "Overview", "icon": "▣"},
             {"id": NavigationPage.RISK_EXPLORER, "label": "Risk Explorer", "icon": "◉"},
             {"id": NavigationPage.ARCHITECTURE, "label": "Architecture", "icon": "◈"},
             {"id": NavigationPage.EVOLUTION, "label": "Evolution", "icon": "↗"},
+            {"id": NavigationPage.GIT_ACTIVITY, "label": "Git Activity", "icon": "↗"},
             {"id": NavigationPage.DEPENDENCIES, "label": "Dependencies", "icon": "⌘"},
         ]
     },

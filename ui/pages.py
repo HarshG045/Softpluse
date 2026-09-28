@@ -6,11 +6,13 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from analysis.change_analyzer import ChangeImpactAnalyzer, ComponentChangeImpact
 from analysis.dependency_analyzer import DependencyGraph
 from analysis.historical_analyzer import SnapshotRecord
 from config import RISK_THRESHOLDS
 from dataset.builder import BuiltDataset
 from explainability.explainer import ModelExplainer
+from ingestion.git_loader import CommitDetail, FileDiffItem, GitLoader
 from ingestion.repository_metadata import RepositoryMetadata
 from ml.evaluate import ModelComparisonReport, ModelEvaluator
 from ml.predict import ComponentRiskProfile, PredictionResult, RiskPredictor
@@ -95,7 +97,8 @@ def render_risk_explorer_page(
     pred_res: PredictionResult,
     dep_graph: DependencyGraph,
     explainer: ModelExplainer,
-    features_df: pd.DataFrame
+    features_df: pd.DataFrame,
+    git_loader: Optional[GitLoader] = None
 ):
     """Renders the developer inspection tool for component risk and signal breakdown."""
     st.markdown("## Component Risk Explorer")
@@ -181,6 +184,39 @@ def render_risk_explorer_page(
                 "dependency_count": profile.dependency_count
             }
             st.plotly_chart(create_feature_comparison_chart(comp_metrics, repo_avg), use_container_width=True)
+
+        # 20.7 Component Git History
+        if git_loader:
+            st.markdown("<hr style='border-color: #21262d; margin: 16px 0;'>", unsafe_allow_html=True)
+            st.markdown(f"#### ↗ Git History for `{selected_comp_path.split('/')[-1]}`")
+            comp_commits = git_loader.get_component_git_history(selected_comp_path)
+            if comp_commits:
+                st.caption(f"Historical commit trajectory ({len(comp_commits)} modifications):")
+                for c in comp_commits[:6]:
+                    dt_str = c.timestamp.strftime("%b %d, %Y")
+                    bugfix_badge = " <span style='background: #ff7b7222; color: #ff7b72; padding: 1px 6px; border-radius: 4px; font-size: 11px;'>BUGFIX</span>" if c.is_bugfix else ""
+                    st.markdown(
+                        f"""
+                        <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px 14px; margin-bottom: 8px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <span style="color: #58a6ff; font-family: monospace; font-size: 12px;">● {dt_str}</span> — 
+                                    <span style="font-weight: 500;">{c.message}</span>
+                                    {bugfix_badge}
+                                </div>
+                                <div style="font-size: 12px; color: #8b949e;">
+                                    <span style="color: #3fb950;">+{c.insertions}</span> / <span style="color: #ff7b72;">-{c.deletions}</span>
+                                </div>
+                            </div>
+                            <div style="font-size: 11px; color: #8b949e; margin-top: 4px;">
+                                Author: <strong>{c.author_name}</strong> • Commit: <code style="color: #c9d1d9;">{c.commit_hash[:7]}</code>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+            else:
+                st.caption("No individual Git commit history found for this component.")
 
 
 def render_evolution_page(
@@ -647,3 +683,567 @@ def render_settings_page(
 
     st.markdown("<hr style='border-color: #21262d; margin: 20px 0;'>", unsafe_allow_html=True)
     render_export_section(pred_res.df_predictions, repo_meta)
+
+
+def render_git_activity_page(
+    git_loader: GitLoader,
+    repo_meta: RepositoryMetadata,
+    pred_res: PredictionResult,
+    change_analyzer: ChangeImpactAnalyzer
+):
+    """
+    Renders the Git Activity & Change Preview module:
+    Connects repository evolution, commits, contributors, diff previews, and AI risk prediction.
+    """
+    st.markdown("## Git Activity")
+    st.caption("Track repository changes, contributors, commits, and their relationship with software risk.")
+
+    # 1. Top Metrics (Real data from GitLoader)
+    commits = git_loader.get_commit_history()
+    contributors = git_loader.get_contributor_stats()
+    
+    all_files_changed = set()
+    for c in commits:
+        all_files_changed.update(c.files_changed)
+
+    total_commits = len(commits)
+    total_contributors = len(contributors)
+    total_files_changed = len(all_files_changed)
+    recent_changes = min(5, total_commits)
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        render_metric_card("TOTAL COMMITS", str(total_commits), f"Across {repo_meta.default_branch} branch")
+    with m2:
+        render_metric_card("CONTRIBUTORS", str(total_contributors), f"{len(contributors)} active authors")
+    with m3:
+        render_metric_card("FILES CHANGED", str(total_files_changed), "Unique files modified")
+    with m4:
+        render_metric_card("RECENT CHANGES", str(recent_changes), "In recent commit window")
+
+    st.markdown("<div style='margin-top: 14px;'></div>", unsafe_allow_html=True)
+
+    # Conceptual Pipeline Banner
+    st.markdown(
+        """
+        <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px 18px; margin-bottom: 20px;">
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: #8b949e; margin-bottom: 6px; font-weight: 600;">
+                CORE RESEARCH PIPELINE
+            </div>
+            <div style="font-family: monospace; font-size: 13px; color: #58a6ff; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <span style="background: #21262d; padding: 3px 8px; border-radius: 4px; color: #e6edf3;">GIT CHANGE</span>
+                <span>➔</span>
+                <span style="background: #21262d; padding: 3px 8px; border-radius: 4px; color: #e6edf3;">CODE / ARCHITECTURE CHANGE</span>
+                <span>➔</span>
+                <span style="background: #21262d; padding: 3px 8px; border-radius: 4px; color: #e6edf3;">STRUCTURAL METRIC CHANGE</span>
+                <span>➔</span>
+                <span style="background: #1f6feb22; border: 1px solid #1f6feb; padding: 3px 8px; border-radius: 4px; color: #58a6ff; font-weight: 600;">AI RISK CHANGE</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # 2. Main Navigation Tabs
+    tab_overview, tab_commits, tab_contributors, tab_changes, tab_branches = st.tabs([
+        "Overview", "Commits", "Contributors", "Changes & Preview", "Branches / Safe Commit"
+    ])
+
+    # ==========================================
+    # TAB 1: OVERVIEW
+    # ==========================================
+    with tab_overview:
+        st.markdown("### Recent Commits")
+        if commits:
+            commit_rows = []
+            for c in reversed(commits[-8:]):
+                dt_str = c.timestamp.strftime("%b %d, %H:%M")
+                commit_rows.append({
+                    "Commit": c.commit_hash[:7],
+                    "Message": c.message,
+                    "Author": c.author_name,
+                    "Time": dt_str,
+                    "Files Touched": len(c.files_changed),
+                    "+ Additions": f"+{c.insertions}",
+                    "- Deletions": f"-{c.deletions}",
+                    "Type": "BUGFIX" if c.is_bugfix else "FEATURE / REFACTOR"
+                })
+            st.dataframe(pd.DataFrame(commit_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No commit history available in repository.")
+
+        st.markdown("<hr style='border-color: #21262d; margin: 20px 0;'>", unsafe_allow_html=True)
+
+        # Contributor Impact Hierarchy (Section 20.15)
+        st.markdown("### Contributor Activity & Component Mapping")
+        st.caption(
+            "Empirical association of developer modifications with affected components and current model risk. "
+            "*(Neutral empirical association — does not imply direct causal attribution)*"
+        )
+
+        if contributors:
+            c_cols = st.columns(min(3, len(contributors)))
+            for idx, cont in enumerate(contributors):
+                col = c_cols[idx % len(c_cols)]
+                with col:
+                    st.markdown(
+                        f"""
+                        <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 14px; margin-bottom: 12px;">
+                            <div style="font-weight: 600; font-size: 15px; color: #e6edf3; display: flex; justify-content: space-between;">
+                                <span>{cont.author_name}</span>
+                                <span style="font-size: 12px; color: #8b949e;">{cont.commit_count} commits</span>
+                            </div>
+                            <div style="font-size: 12px; color: #8b949e; margin-top: 2px;">
+                                <span style="color: #3fb950;">+{cont.insertions}</span> / <span style="color: #ff7b72;">-{cont.deletions}</span> lines • {cont.files_changed_count} files
+                            </div>
+                            <div style="margin-top: 10px; border-top: 1px solid #21262d; padding-top: 8px;">
+                                <div style="font-size: 11px; text-transform: uppercase; color: #8b949e; font-weight: 600; margin-bottom: 6px;">
+                                    Components Touched
+                                </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    for f in cont.components_touched[:4]:
+                        prof = pred_res.profiles_by_path.get(f) or pred_res.profiles_by_path.get(f.replace("\\", "/"))
+                        risk_str = f"Risk: {prof.risk_percentage}% {prof.risk_category}" if prof else "Tracked file"
+                        color = "#ff7b72" if prof and prof.risk_category == "HIGH" else ("#d29922" if prof and prof.risk_category == "MEDIUM" else "#3fb950")
+                        st.markdown(
+                            f"""
+                            <div style="font-size: 12px; padding: 4px 0; display: flex; justify-content: space-between; border-bottom: 1px solid #21262d55;">
+                                <code style="color: #58a6ff; font-size: 11px;">{f.split('/')[-1]}</code>
+                                <span style="color: {color}; font-weight: 500; font-size: 11px;">{risk_str}</span>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                    st.markdown("</div></div>", unsafe_allow_html=True)
+
+    # ==========================================
+    # TAB 2: COMMITS (TIMELINE & DETAIL)
+    # ==========================================
+    with tab_commits:
+        st.markdown("### Commit Timeline & Detailed Inspector")
+        if not commits:
+            st.info("No commit history found.")
+        else:
+            commit_options = [f"{c.commit_hash[:7]} — {c.message[:50]} ({c.author_name})" for c in reversed(commits)]
+            selected_commit_idx = st.selectbox(
+                "Select Commit to Inspect",
+                options=list(range(len(commit_options))),
+                format_func=lambda i: commit_options[i],
+                index=0
+            )
+            selected_commit_rec = list(reversed(commits))[selected_commit_idx]
+            detail = git_loader.get_commit_detail(selected_commit_rec.commit_hash)
+
+            if detail:
+                st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+                # Commit Header Card
+                c1, c2, c3 = st.columns([1.5, 1, 1])
+                with c1:
+                    st.markdown(f"#### Commit `{detail.short_hash}`")
+                    st.markdown(f"**Message:** {detail.message}")
+                    if detail.is_bugfix:
+                        st.markdown("<span style='background: #ff7b7222; color: #ff7b72; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600;'>BUGFIX COMMIT</span>", unsafe_allow_html=True)
+                with c2:
+                    st.markdown(f"**Author:** `{detail.author_name}`")
+                    st.markdown(f"**Email:** `{detail.author_email}`")
+                    st.markdown(f"**Date:** `{detail.timestamp.strftime('%B %d, %Y • %H:%M UTC')}`")
+                with c3:
+                    st.markdown(f"**Parent:** `{detail.parent_hash[:7] if detail.parent_hash else 'root'}`")
+                    st.markdown(f"**Total Additions:** <span style='color: #3fb950; font-weight: 600;'>+{detail.total_insertions}</span>", unsafe_allow_html=True)
+                    st.markdown(f"**Total Deletions:** <span style='color: #ff7b72; font-weight: 600;'>-{detail.total_deletions}</span>", unsafe_allow_html=True)
+
+                st.markdown("<hr style='border-color: #21262d; margin: 16px 0;'>", unsafe_allow_html=True)
+
+                # Files Changed & Diff Split
+                st.markdown("#### Files Changed in this Commit")
+                for item in detail.files_changed:
+                    badge_color = "#3fb950" if item.change_type == "ADDED" else ("#ff7b72" if item.change_type == "DELETED" else "#58a6ff")
+                    with st.expander(f"[{item.change_type}] {item.filepath}  (+{item.insertions} / -{item.deletions})", expanded=True):
+                        st.markdown(
+                            f"""
+                            <div style="font-size: 12px; margin-bottom: 8px;">
+                                <span style="background: {badge_color}22; color: {badge_color}; padding: 2px 6px; border-radius: 4px; font-weight: 600;">{item.change_type}</span>
+                                <code style="margin-left: 8px;">{item.filepath}</code>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                        if item.patch:
+                            st.code(item.patch, language="diff")
+                        else:
+                            st.caption("No patch text recorded.")
+
+                # Direct Link to Impact Analysis
+                st.markdown("<hr style='border-color: #21262d; margin: 16px 0;'>", unsafe_allow_html=True)
+                if st.button("⚡ Analyze This Commit's AI Risk Impact", key=f"analyze_commit_{detail.short_hash}", type="primary"):
+                    summary = change_analyzer.analyze_commit_or_preview(detail.files_changed)
+                    st.markdown("#### Commit Risk Impact Analysis")
+                    if summary.component_impacts:
+                        for imp in summary.component_impacts:
+                            st.markdown(
+                                f"""
+                                <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px 16px; margin-bottom: 10px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                                        <div style="font-weight: 600; font-size: 14px;"><code>{imp.filepath}</code></div>
+                                        <div>
+                                            <span style="color: #8b949e;">Before: {imp.current_risk_pct}% ({imp.current_risk_category})</span> ➔ 
+                                            <span style="color: #58a6ff; font-weight: 600;">After: {imp.proposed_risk_pct}% ({imp.proposed_risk_category})</span>
+                                            <span style="margin-left: 8px; font-weight: 600; color: {'#ff7b72' if imp.risk_delta_pct > 0 else '#3fb950'};">({imp.risk_delta_pct:+d} pp)</span>
+                                        </div>
+                                    </div>
+                                    <div style="font-size: 12px; color: #8b949e; margin-top: 6px;">
+                                        {imp.explanation}
+                                    </div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                    else:
+                        st.info("Change impact could not be estimated with the available analysis for this commit's files.")
+
+    # ==========================================
+    # TAB 3: CONTRIBUTORS & "WHO CHANGED WHAT?"
+    # ==========================================
+    with tab_contributors:
+        st.markdown("### Contributors Overview")
+        if contributors:
+            c_table = []
+            for c in contributors:
+                c_table.append({
+                    "Contributor": c.author_name,
+                    "Commits": c.commit_count,
+                    "Files Changed": c.files_changed_count,
+                    "Additions (+)": f"+{c.insertions}",
+                    "Deletions (-)": f"-{c.deletions}",
+                    "Components Touched": len(c.components_touched),
+                    "Last Activity": c.last_activity.strftime("%b %d, %Y • %H:%M")
+                })
+            st.dataframe(pd.DataFrame(c_table), use_container_width=True, hide_index=True)
+
+            st.markdown("<hr style='border-color: #21262d; margin: 20px 0;'>", unsafe_allow_html=True)
+
+            # 20.6 "Who Changed What?"
+            st.markdown("### Who Changed What?")
+            st.caption("Select a contributor to drill into specific components touched and their risk profiles.")
+
+            contributor_names = [c.author_name for c in contributors]
+            selected_author = st.selectbox("Select Contributor", options=contributor_names, index=0)
+            author_data = next((c for c in contributors if c.author_name == selected_author), None)
+
+            if author_data:
+                st.markdown(f"#### Components Modified by `{author_data.author_name}`")
+                
+                for fpath in author_data.components_touched:
+                    # Calculate stats for this specific author on this file
+                    author_file_commits = [
+                        c for c in author_data.commits 
+                        if any(fpath.lower() in f.lower() or f.lower() in fpath.lower() for f in c.files_changed)
+                    ]
+                    author_ins = sum(c.insertions for c in author_file_commits)
+                    author_dels = sum(c.deletions for c in author_file_commits)
+                    prof = pred_res.profiles_by_path.get(fpath) or pred_res.profiles_by_path.get(fpath.replace("\\", "/"))
+
+                    risk_badge = ""
+                    if prof:
+                        r_col = "#ff7b72" if prof.risk_category == "HIGH" else ("#d29922" if prof.risk_category == "MEDIUM" else "#3fb950")
+                        risk_badge = f"<span style='background: {r_col}22; color: {r_col}; border: 1px solid {r_col}55; padding: 2px 8px; border-radius: 4px; font-weight: 600; font-size: 12px;'>RISK: {prof.risk_percentage}% ({prof.risk_category})</span>"
+                    
+                    st.markdown(
+                        f"""
+                        <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px 16px; margin-bottom: 8px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <span style="font-family: monospace; font-size: 14px; font-weight: 600; color: #58a6ff;">{fpath}</span>
+                                    <span style="font-size: 12px; color: #8b949e; margin-left: 10px;">({len(author_file_commits)} commits)</span>
+                                </div>
+                                <div>
+                                    {risk_badge}
+                                </div>
+                            </div>
+                            <div style="font-size: 12px; color: #8b949e; margin-top: 6px;">
+                                Contributor Churn: <span style="color: #3fb950;">+{author_ins}</span> / <span style="color: #ff7b72;">-{author_dels}</span> lines
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+
+            # 20.16 Contributor Activity Timeline
+            st.markdown("<hr style='border-color: #21262d; margin: 20px 0;'>", unsafe_allow_html=True)
+            st.markdown("### Contributor Activity Timeline")
+            for c in reversed(commits):
+                dt_day = c.timestamp.strftime("%B %d, %Y")
+                st.markdown(
+                    f"""
+                    <div style="margin-bottom: 12px; padding-left: 12px; border-left: 2px solid #30363d;">
+                        <div style="font-size: 12px; color: #8b949e;">{dt_day}</div>
+                        <div style="font-size: 14px; font-weight: 600; color: #e6edf3;">
+                            {c.author_name}
+                            <span style="font-weight: 400; font-size: 13px; color: #8b949e;"> — {c.message}</span>
+                        </div>
+                        <div style="font-size: 12px; color: #8b949e; font-family: monospace; margin-top: 2px;">
+                            Touched: {', '.join([f.split('/')[-1] for f in c.files_changed[:3]])} • <span style="color: #3fb950;">+{c.insertions}</span> / <span style="color: #ff7b72;">-{c.deletions}</span>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+    # ==========================================
+    # TAB 4: CHANGES (PREVIEW & IMPACT ANALYSIS)
+    # ==========================================
+    with tab_changes:
+        st.markdown("### Change Preview & AI Risk Impact Simulation")
+        st.caption("Preview code modifications before committing and evaluate their predicted impact on software risk.")
+
+        # Stage Progress Bar (Section 20.11)
+        st.markdown(
+            """
+            <div style="display: flex; gap: 8px; align-items: center; background: #161b22; padding: 10px 16px; border-radius: 6px; border: 1px solid #30363d; margin-bottom: 18px;">
+                <span style="color: #3fb950; font-weight: 600;">● 1. Edit</span>
+                <span style="color: #8b949e;">➔</span>
+                <span style="color: #58a6ff; font-weight: 600;">● 2. Preview</span>
+                <span style="color: #8b949e;">➔</span>
+                <span style="color: #d29922; font-weight: 600;">● 3. Analyze</span>
+                <span style="color: #8b949e;">➔</span>
+                <span style="color: #8b949e;">○ 4. Review Impact</span>
+                <span style="color: #8b949e;">➔</span>
+                <span style="color: #8b949e;">○ 5. Commit</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        preview_mode = st.radio(
+            "Change Source for Preview",
+            options=["Select Existing Commit", "Simulate Custom Component Modification"],
+            horizontal=True
+        )
+
+        diff_to_analyze: List[FileDiffItem] = []
+
+        if preview_mode == "Select Existing Commit" and commits:
+            c_opts = [f"{c.commit_hash[:7]} — {c.message}" for c in reversed(commits)]
+            c_idx = st.selectbox("Select Commit to Preview", options=list(range(len(c_opts))), format_func=lambda i: c_opts[i], key="change_prev_commit")
+            sel_c = list(reversed(commits))[c_idx]
+            dtl = git_loader.get_commit_detail(sel_c.commit_hash)
+            if dtl:
+                diff_to_analyze = dtl.files_changed
+                st.markdown(f"**Files Changed in `{dtl.short_hash}`:**")
+                for d in diff_to_analyze:
+                    st.markdown(f"- `[{d.change_type}]` **{d.filepath}** (+{d.insertions} / -{d.deletions})")
+                    if d.patch:
+                        st.code(d.patch, language="diff")
+
+        else:
+            # Interactive patch simulator
+            comp_list = list(pred_res.profiles_by_path.keys())
+            target_comp = st.selectbox("Select Target Component to Modify", options=comp_list, key="sim_target_comp")
+            
+            p1, p2 = st.columns(2)
+            with p1:
+                added_lines_cnt = st.number_input("Proposed Lines Added (+)", min_value=0, max_value=500, value=25, step=5)
+                add_branching = st.checkbox("Include Branching Logic (if / for / while)", value=True)
+            with p2:
+                deleted_lines_cnt = st.number_input("Proposed Lines Removed (-)", min_value=0, max_value=500, value=5, step=5)
+                add_new_dep = st.checkbox("Add New External Module Import", value=False)
+
+            # Build mock diff text
+            mock_patch_lines = [f"--- a/{target_comp}", f"+++ b/{target_comp}", "@@ -10,4 +10,12 @@"]
+            if add_new_dep:
+                mock_patch_lines.append("+import external_payment_gateway")
+            if add_branching:
+                mock_patch_lines.append("+    if validate_request(payload):")
+                mock_patch_lines.append("+        for attempt in range(max_retries):")
+                mock_patch_lines.append("+            execute_transaction()")
+            else:
+                mock_patch_lines.append("+    execute_direct_call()")
+            mock_patch_lines.append("-    legacy_unverified_call()")
+
+            mock_patch = "\n".join(mock_patch_lines)
+            st.markdown("#### Live Diff Preview")
+            st.code(mock_patch, language="diff")
+
+            diff_to_analyze = [
+                FileDiffItem(
+                    filepath=target_comp,
+                    change_type="MODIFIED",
+                    insertions=int(added_lines_cnt),
+                    deletions=int(deleted_lines_cnt),
+                    patch=mock_patch
+                )
+            ]
+
+        # 20.9 & 20.10: [ Analyze Change ] action
+        st.markdown("<hr style='border-color: #21262d; margin: 16px 0;'>", unsafe_allow_html=True)
+        if st.button("⚡ Analyze Change", type="primary", key="btn_run_change_analysis"):
+            with st.spinner("Parsing diff... Updating structural metrics... Analyzing dependencies... Running risk model..."):
+                impact_summary = change_analyzer.analyze_commit_or_preview(diff_to_analyze)
+
+            st.markdown("### Change Impact Analysis")
+            s1, s2, s3, s4 = st.columns(4)
+            with s1:
+                render_metric_card("Files Affected", str(impact_summary.total_files_affected), "In diff preview")
+            with s2:
+                render_metric_card("Components Affected", str(impact_summary.total_components_affected), "In model pipeline")
+            with s3:
+                render_metric_card("Dependency Changes", f"{impact_summary.total_dependency_changes:+d}", "Topology shifts")
+            with s4:
+                render_metric_card("Structural Shifts", str(impact_summary.total_structural_changes), "Metric modifications")
+
+            st.markdown("<div style='margin-top: 14px;'></div>", unsafe_allow_html=True)
+
+            # Before vs After Risk State
+            if impact_summary.component_impacts:
+                for imp in impact_summary.component_impacts:
+                    b_col = "#ff7b72" if imp.current_risk_category == "HIGH" else ("#d29922" if imp.current_risk_category == "MEDIUM" else "#3fb950")
+                    a_col = "#ff7b72" if imp.proposed_risk_category == "HIGH" else ("#d29922" if imp.proposed_risk_category == "MEDIUM" else "#3fb950")
+
+                    st.markdown(
+                        f"""
+                        <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 16px; margin-bottom: 14px;">
+                            <div style="font-size: 15px; font-weight: 600; font-family: monospace; color: #58a6ff; margin-bottom: 12px;">
+                                {imp.filepath}
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; text-align: center;">
+                                <div style="background: #0d1117; padding: 10px; border-radius: 6px; border: 1px solid #21262d;">
+                                    <div style="font-size: 11px; text-transform: uppercase; color: #8b949e;">CURRENT STATE</div>
+                                    <div style="font-size: 20px; font-weight: 700; color: {b_col};">{imp.current_risk_pct}%</div>
+                                    <div style="font-size: 11px; color: {b_col}; font-weight: 600;">{imp.current_risk_category}</div>
+                                </div>
+                                <div style="background: #0d1117; padding: 10px; border-radius: 6px; border: 1px solid #21262d;">
+                                    <div style="font-size: 11px; text-transform: uppercase; color: #8b949e;">PROPOSED STATE</div>
+                                    <div style="font-size: 20px; font-weight: 700; color: {a_col};">{imp.proposed_risk_pct}%</div>
+                                    <div style="font-size: 11px; color: {a_col}; font-weight: 600;">{imp.proposed_risk_category}</div>
+                                </div>
+                                <div style="background: #0d1117; padding: 10px; border-radius: 6px; border: 1px solid #21262d;">
+                                    <div style="font-size: 11px; text-transform: uppercase; color: #8b949e;">RISK DELTA</div>
+                                    <div style="font-size: 20px; font-weight: 700; color: {'#ff7b72' if imp.risk_delta_pct > 0 else '#3fb950'};">
+                                        {imp.risk_delta_pct:+d} pp
+                                    </div>
+                                    <div style="font-size: 11px; color: #8b949e;">percentage points</div>
+                                </div>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+
+                    # 20.10: Why did the prediction change?
+                    st.markdown("#### Why Did the Prediction Change?")
+                    if imp.changed_signals:
+                        sig_rows = []
+                        for sig in imp.changed_signals:
+                            sig_rows.append({
+                                "Signal": sig.display_name,
+                                "Before": f"{sig.before_value} {sig.unit}".strip(),
+                                "Proposed": f"{sig.after_value} {sig.unit}".strip(),
+                                "Signal Delta": f"{sig.after_value - sig.before_value:+}",
+                                "Model Impact Contribution": f"{sig.estimated_contribution:+0.1f} pp"
+                            })
+                        st.dataframe(pd.DataFrame(sig_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("No significant metric alterations detected.")
+
+                    st.info(f"Summary: {imp.explanation}")
+            else:
+                st.warning("Change impact could not be estimated with the available analysis.")
+
+    # ==========================================
+    # TAB 5: BRANCHES / SAFE COMMIT & PUSH
+    # ==========================================
+    with tab_branches:
+        st.markdown("### Branches & Safe Commit Workflow")
+        st.caption("Manage branch comparisons, create explicit commits, and synchronize with remotes safely.")
+
+        # Branch Comparison (Section 20.19)
+        active_branch, all_branches = git_loader.get_branches()
+        b1, b2 = st.columns(2)
+        with b1:
+            base_branch = st.selectbox("Base Branch", options=all_branches, index=0, key="base_branch_sel")
+        with b2:
+            target_branch = st.selectbox("Compare Branch", options=all_branches, index=min(1, len(all_branches)-1), key="target_branch_sel")
+
+        b_comp = git_loader.compare_branches(base_branch, target_branch)
+        bc1, bc2, bc3, bc4 = st.columns(4)
+        with bc1:
+            render_metric_card("Commits Ahead", str(b_comp.ahead_commits), f"{target_branch} vs {base_branch}")
+        with bc2:
+            render_metric_card("Files Changed", str(len(b_comp.files_changed)), "Modified files")
+        with bc3:
+            render_metric_card("Insertions", f"+{b_comp.insertions}", "Lines added")
+        with bc4:
+            render_metric_card("Deletions", f"-{b_comp.deletions}", "Lines removed")
+
+        st.markdown("<hr style='border-color: #21262d; margin: 20px 0;'>", unsafe_allow_html=True)
+
+        # 20.12 Commit Action
+        st.markdown("### Safe Commit Action")
+        st.markdown("Commit pending working tree modifications. *(Requires explicit user confirmation)*")
+
+        comm_msg = st.text_input("Commit Message", value="Refactor routing and improve API validation handling")
+        author_opts = [c.author_name for c in contributors] if contributors else ["Developer"]
+        selected_author = st.selectbox("Author", options=author_opts, index=0)
+        
+        st.caption(f"Target Branch: `{active_branch}`")
+
+        if st.button("Commit Changes", type="primary", key="btn_execute_commit"):
+            success, result_msg = git_loader.safe_commit(
+                message=comm_msg,
+                author_name=selected_author,
+                author_email="developer@softwarepulse.ai"
+            )
+            if success:
+                st.markdown(
+                    f"""
+                    <div style="background: #3fb95022; border: 1px solid #3fb950; border-radius: 6px; padding: 14px; margin-top: 10px;">
+                        <div style="font-weight: 600; color: #3fb950; font-size: 15px;">✓ Committed successfully</div>
+                        <div style="font-family: monospace; font-size: 13px; margin-top: 4px; color: #e6edf3;">
+                            Hash: <code>{result_msg[:7]}</code> • {comm_msg}
+                        </div>
+                        <div style="font-size: 12px; color: #8b949e; margin-top: 2px;">
+                            Author: {selected_author} • Branch: {active_branch}
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            else:
+                st.warning(f"Commit status: {result_msg}")
+
+        st.markdown("<hr style='border-color: #21262d; margin: 20px 0;'>", unsafe_allow_html=True)
+
+        # 20.13 Push / Sync Action
+        st.markdown("### Push to Remote")
+        st.caption("Synchronize committed changes with configured upstream Git remote.")
+
+        p_col1, p_col2 = st.columns([2, 1])
+        with p_col1:
+            st.markdown(
+                f"""
+                - **Remote:** `origin`
+                - **Branch:** `{active_branch}`
+                - **Status:** <span style="color: #58a6ff; font-weight: 600;">● Ready for push sync</span>
+                """,
+                unsafe_allow_html=True
+            )
+        with p_col2:
+            if st.button("Push to Remote", key="btn_push_remote"):
+                p_success, p_msg = git_loader.safe_push("origin", active_branch)
+                if p_success:
+                    st.success(p_msg)
+                else:
+                    st.info(f"Push unavailable — configure repository authentication or credentials. ({p_msg})")
+
+        # 20.24 Read-Only Fallback Note
+        st.markdown(
+            """
+            <div style="background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px 14px; margin-top: 16px; font-size: 12px; color: #8b949e;">
+                <strong>READ-ONLY REPOSITORY SAFETY:</strong> SoftwarePulse analysis, diff rendering, and AI risk simulations function continuously in read-only mode without requiring write/push permissions.
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+

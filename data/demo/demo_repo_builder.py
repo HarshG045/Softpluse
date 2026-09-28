@@ -14,10 +14,17 @@ from config import DEMO_DATA_DIR
 DEMO_REPO_PATH = DEMO_DATA_DIR / "softwarepulse_demo_repo"
 
 
-def create_demo_repository() -> Path:
+def create_demo_repository(force_recreate: bool = False) -> Path:
     """Creates a local Git repository with multi-commit evolution, branches, and modular dependencies."""
-    if DEMO_REPO_PATH.exists() and (DEMO_REPO_PATH / ".git").exists():
-        return DEMO_REPO_PATH
+    if not force_recreate and DEMO_REPO_PATH.exists() and (DEMO_REPO_PATH / ".git").exists():
+        # Quick check if it has multiple authors
+        try:
+            res = subprocess.run(["git", "log", "--format=%an"], cwd=str(DEMO_REPO_PATH), capture_output=True, text=True)
+            authors = set(res.stdout.strip().split("\n"))
+            if len(authors) >= 2:
+                return DEMO_REPO_PATH
+        except Exception:
+            pass
 
     if DEMO_REPO_PATH.exists():
         shutil.rmtree(DEMO_REPO_PATH, ignore_errors=True)
@@ -190,37 +197,37 @@ class ApiController:
 
     # Commit 1: Initial commit
     subprocess.run(["git", "add", "."], cwd=str(DEMO_REPO_PATH), capture_output=True)
-    subprocess.run(["git", "commit", "-m", "feat: initial commit with modular microservices and auth"], cwd=str(DEMO_REPO_PATH), capture_output=True)
+    subprocess.run(["git", "commit", "--author=Aditya <aditya@softwarepulse.dev>", "-m", "feat: initial commit with modular microservices and auth"], cwd=str(DEMO_REPO_PATH), capture_output=True)
 
     # Commit 2: Add validation to payment_service
     payment_code += "\n    def refund_transaction(self, tx_id: str, reason: str):\n        self.logger.info(f'Refund requested for {tx_id}: {reason}')\n        return True\n"
     (services_dir / "payment_service.py").write_text(payment_code, encoding="utf-8")
     subprocess.run(["git", "add", "services/payment_service.py"], cwd=str(DEMO_REPO_PATH), capture_output=True)
-    subprocess.run(["git", "commit", "-m", "feat: implement refund transaction capabilities"], cwd=str(DEMO_REPO_PATH), capture_output=True)
+    subprocess.run(["git", "commit", "--author=Harsh <harsh@softwarepulse.dev>", "-m", "feat: implement refund transaction capabilities"], cwd=str(DEMO_REPO_PATH), capture_output=True)
 
     # Commit 3: Bugfix commit in payment_service
     payment_code = payment_code.replace("self.retry_limit = 3", "self.retry_limit = 5  # fix: increase retry limits on high load")
     (services_dir / "payment_service.py").write_text(payment_code, encoding="utf-8")
     subprocess.run(["git", "add", "services/payment_service.py"], cwd=str(DEMO_REPO_PATH), capture_output=True)
-    subprocess.run(["git", "commit", "-m", "fix: resolve timeout and transaction crash under concurrency leak"], cwd=str(DEMO_REPO_PATH), capture_output=True)
+    subprocess.run(["git", "commit", "--author=Yash <yash@softwarepulse.dev>", "-m", "fix: resolve timeout and transaction crash under concurrency leak"], cwd=str(DEMO_REPO_PATH), capture_output=True)
 
     # Commit 4: Bugfix in auth_service
     auth_code = auth_code.replace("return True", "return True # fix: secure token validation patch")
     (services_dir / "auth_service.py").write_text(auth_code, encoding="utf-8")
     subprocess.run(["git", "add", "services/auth_service.py"], cwd=str(DEMO_REPO_PATH), capture_output=True)
-    subprocess.run(["git", "commit", "-m", "fix: patch vulnerability in session revocation bug"], cwd=str(DEMO_REPO_PATH), capture_output=True)
+    subprocess.run(["git", "commit", "--author=Pranav <pranav@softwarepulse.dev>", "-m", "fix: patch vulnerability in session revocation bug"], cwd=str(DEMO_REPO_PATH), capture_output=True)
 
     # Commit 5: Update database & routes
     routes_code += "\n    def health_check(self):\n        return {'status': 'healthy'}\n"
     (api_dir / "routes.py").write_text(routes_code, encoding="utf-8")
     subprocess.run(["git", "add", "api/routes.py"], cwd=str(DEMO_REPO_PATH), capture_output=True)
-    subprocess.run(["git", "commit", "-m", "chore: add system health check telemetry endpoint"], cwd=str(DEMO_REPO_PATH), capture_output=True)
+    subprocess.run(["git", "commit", "--author=Harsh <harsh@softwarepulse.dev>", "-m", "chore: add system health check telemetry endpoint"], cwd=str(DEMO_REPO_PATH), capture_output=True)
 
     # Commit 6: Churn in payment service
     payment_code += "\n    def verify_webhook_signature(self, sig: str):\n        return len(sig) == 64\n"
     (services_dir / "payment_service.py").write_text(payment_code, encoding="utf-8")
     subprocess.run(["git", "add", "services/payment_service.py"], cwd=str(DEMO_REPO_PATH), capture_output=True)
-    subprocess.run(["git", "commit", "-m", "fix: repair webhook verification error and payload parsing"], cwd=str(DEMO_REPO_PATH), capture_output=True)
+    subprocess.run(["git", "commit", "--author=Harsh <harsh@softwarepulse.dev>", "-m", "fix: repair webhook verification error and payload parsing"], cwd=str(DEMO_REPO_PATH), capture_output=True)
 
     return DEMO_REPO_PATH
 

@@ -12,34 +12,36 @@ BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from config import DEMO_DATA_DIR, RANDOM_STATE
-from ingestion.repository_loader import RepositoryLoader
-from ingestion.git_loader import GitLoader
+from analysis.change_analyzer import ChangeImpactAnalyzer
 from analysis.code_analyzer import CodeAnalyzer
-from analysis.git_analyzer import GitAnalyzer
 from analysis.dependency_analyzer import DependencyAnalyzer
+from analysis.git_analyzer import GitAnalyzer
 from analysis.historical_analyzer import HistoricalAnalyzer
-from dataset.builder import DatasetBuilder
-from ml.train import ModelTrainer, ClassifierAlgorithm
-from ml.predict import RiskPredictor
-from ml.evaluate import ModelEvaluator
-from explainability.explainer import ModelExplainer
-from simulation.what_if import WhatIfEngine
+from config import DEMO_DATA_DIR, RANDOM_STATE
 from data.demo.demo_repo_builder import create_demo_repository
-from ui.styles import get_custom_css
-from ui.sidebar import render_sidebar, NavigationPage
+from dataset.builder import DatasetBuilder
+from explainability.explainer import ModelExplainer
+from ingestion.git_loader import GitLoader
+from ingestion.repository_loader import RepositoryLoader
+from ml.evaluate import ModelEvaluator
+from ml.predict import RiskPredictor
+from ml.train import ClassifierAlgorithm, ModelTrainer
+from simulation.what_if import WhatIfEngine
 from ui.header import render_header
 from ui.pages import (
+    render_architecture_page,
+    render_dependencies_page,
+    render_evolution_page,
+    render_explainability_page,
+    render_git_activity_page,
+    render_model_evaluation_page,
     render_overview_page,
     render_risk_explorer_page,
-    render_architecture_page,
-    render_evolution_page,
-    render_dependencies_page,
-    render_explainability_page,
+    render_settings_page,
     render_what_if_lab_page,
-    render_model_evaluation_page,
-    render_settings_page
 )
+from ui.sidebar import NavigationPage, render_sidebar
+from ui.styles import get_custom_css
 
 
 logging.basicConfig(level=logging.INFO)
@@ -113,12 +115,14 @@ def execute_repository_analysis(repo_input: str, is_demo: bool, algorithm: Class
         evaluator = ModelEvaluator()
         comp_report = evaluator.run_comparative_experiment(dataset.split_result, algorithm=algorithm)
         what_if_engine = WhatIfEngine(model_bundle, dep_graph)
+        change_analyzer = ChangeImpactAnalyzer(model_bundle, dep_graph, predictions_res.profiles)
 
         status.update(label="Repository Analysis Complete ✓", state="complete", expanded=False)
 
     return {
         "metadata": metadata,
         "commits": commits,
+        "git_loader": git_loader,
         "code_map": code_map,
         "dep_graph": dep_graph,
         "snapshots": snapshots,
@@ -128,6 +132,7 @@ def execute_repository_analysis(repo_input: str, is_demo: bool, algorithm: Class
         "explainer": explainer,
         "comp_report": comp_report,
         "what_if_engine": what_if_engine,
+        "change_analyzer": change_analyzer,
         "is_analyzed": True
     }
 
@@ -176,7 +181,8 @@ def main():
             data["predictions_res"],
             data["dep_graph"],
             data["explainer"],
-            data["dataset"].current_features_df
+            data["dataset"].current_features_df,
+            git_loader=data.get("git_loader")
         )
 
     elif selected_page == NavigationPage.ARCHITECTURE:
@@ -186,8 +192,15 @@ def main():
         render_dependencies_page(data["dep_graph"], data["predictions_res"])
 
     elif selected_page == NavigationPage.EVOLUTION:
-
         render_evolution_page(data["snapshots"], data["predictions_res"])
+
+    elif selected_page == NavigationPage.GIT_ACTIVITY:
+        render_git_activity_page(
+            data["git_loader"],
+            data["metadata"],
+            data["predictions_res"],
+            data["change_analyzer"]
+        )
 
     elif selected_page == NavigationPage.EXPLAINABILITY:
         render_explainability_page(
