@@ -78,12 +78,19 @@ class FeatureEngineer:
     def combine_metrics(
         code_map: Dict[str, CodeMetrics],
         git_map: Dict[str, ComponentGitMetrics],
-        struct_map: Dict[str, ComponentStructuralMetrics]
+        struct_map: Dict[str, ComponentStructuralMetrics],
+        target_filepaths: Optional[List[str]] = None
     ) -> pd.DataFrame:
         """
         Merges code, git, and structural metrics for all components into a pandas DataFrame.
         """
-        all_filepaths = set(code_map.keys()) | set(git_map.keys()) | set(struct_map.keys())
+        if target_filepaths is not None:
+            all_filepaths = set(target_filepaths)
+        elif code_map:
+            all_filepaths = set(code_map.keys())
+        else:
+            all_filepaths = set(code_map.keys()) | set(git_map.keys()) | set(struct_map.keys())
+
         rows: List[Dict] = []
 
         for fp in sorted(all_filepaths):

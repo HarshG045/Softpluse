@@ -3,7 +3,7 @@ DatasetBuilder: Orchestrates temporal feature extraction, labeling, and train/te
 """
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 import pandas as pd
 
@@ -55,25 +55,25 @@ class DatasetBuilder:
             git_analyzer = GitAnalyzer(self.commits)
             current_git_map = git_analyzer.analyze_components(filepaths)
             struct_map = self.dep_graph.get_metrics_for_all()
-            current_df = FeatureEngineer.combine_metrics(self.code_metrics_map, current_git_map, struct_map)
+            current_df = FeatureEngineer.combine_metrics(self.code_metrics_map, current_git_map, struct_map, target_filepaths=filepaths)
 
             lbl_gen = LabelGenerator(self.commits)
-            labels, summary = lbl_gen.generate_labels(filepaths, split_time=datetime.min)
+            labels, summary = lbl_gen.generate_labels(filepaths, split_time=datetime.min.replace(tzinfo=timezone.utc))
 
             # Simple split for tiny commit history
             n_train = max(1, int(len(current_df) * self.train_ratio))
             train_df = current_df.iloc[:n_train]
             test_df = current_df.iloc[n_train:] if n_train < len(current_df) else current_df
 
-            train_labels = {fp: labels[fp] for fp in train_df["filepath"]}
-            test_labels = {fp: labels[fp] for fp in test_df["filepath"]}
+            train_labels = {fp: labels.get(fp, 0) for fp in train_df["filepath"]}
+            test_labels = {fp: labels.get(fp, 0) for fp in test_df["filepath"]}
 
             split_res = TemporalSplitter.split_by_time_cutoff(
                 df_train_features=train_df,
                 train_labels=train_labels,
                 df_test_features=test_df,
                 test_labels=test_labels,
-                split_time=datetime.now()
+                split_time=datetime.now(timezone.utc)
             )
 
             return BuiltDataset(
@@ -93,7 +93,7 @@ class DatasetBuilder:
         train_git_analyzer = GitAnalyzer(self.commits[:split_idx])
         train_git_map = train_git_analyzer.analyze_components(filepaths, as_of_time=split_time)
         struct_map = self.dep_graph.get_metrics_for_all()
-        train_features_df = FeatureEngineer.combine_metrics(self.code_metrics_map, train_git_map, struct_map)
+        train_features_df = FeatureEngineer.combine_metrics(self.code_metrics_map, train_git_map, struct_map, target_filepaths=filepaths)
 
         # 2. Labels for train: evaluate bugfixes in the test period (after split_time)
         label_gen = LabelGenerator(self.commits)
@@ -102,7 +102,7 @@ class DatasetBuilder:
         # 3. Current Test Features (using all commits up to now for latest component status)
         full_git_analyzer = GitAnalyzer(self.commits)
         current_git_map = full_git_analyzer.analyze_components(filepaths)
-        current_features_df = FeatureEngineer.combine_metrics(self.code_metrics_map, current_git_map, struct_map)
+        current_features_df = FeatureEngineer.combine_metrics(self.code_metrics_map, current_git_map, struct_map, target_filepaths=filepaths)
 
         # Labels for test evaluation
         test_labels, _ = label_gen.generate_labels(filepaths, split_time=split_time)

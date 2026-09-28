@@ -3,7 +3,7 @@ LabelGenerator: Computes future bugfix association labels or future churn proxy 
 """
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional, Set
 import numpy as np
@@ -12,6 +12,13 @@ import pandas as pd
 from ingestion.git_loader import CommitRecord
 
 logger = logging.getLogger(__name__)
+
+
+def _to_utc(dt: datetime) -> datetime:
+    """Ensures datetime object is timezone-aware in UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class TargetLabelType(str, Enum):
@@ -44,7 +51,8 @@ class LabelGenerator:
         Calculates whether each file in `filepaths` is modified by a bugfix commit in the future window (after split_time).
         If no bugfix commits exist in the future window, automatically falls back to top-percentile churn proxy label.
         """
-        future_commits = [c for c in self.commits if c.timestamp > split_time]
+        split_utc = _to_utc(split_time)
+        future_commits = [c for c in self.commits if _to_utc(c.timestamp) > split_utc]
         if future_window_commits and len(future_commits) > future_window_commits:
             future_commits = future_commits[:future_window_commits]
 

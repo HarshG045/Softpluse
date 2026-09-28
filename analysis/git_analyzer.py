@@ -46,6 +46,13 @@ class ComponentGitMetrics:
         }
 
 
+def _to_utc(dt: datetime) -> datetime:
+    """Ensures datetime object is timezone-aware in UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 class GitAnalyzer:
     """Analyzes a chronological list of CommitRecord objects to extract per-component evolution metrics."""
 
@@ -59,15 +66,15 @@ class GitAnalyzer:
         Calculates evolution metrics for all files appearing in commits or target_filepaths.
         If as_of_time is given, only commits up to as_of_time are included (preventing temporal leakage).
         """
-        # Filter commits chronologically up to as_of_time if specified
-        active_commits = [c for c in self.commits if as_of_time is None or c.timestamp <= as_of_time]
+        as_of_utc = _to_utc(as_of_time) if as_of_time else None
+        active_commits = [c for c in self.commits if as_of_utc is None or _to_utc(c.timestamp) <= as_of_utc]
         total_active_commits = len(active_commits)
 
         # Set reference timestamp
-        if as_of_time:
-            ref_time = as_of_time
+        if as_of_utc:
+            ref_time = as_of_utc
         elif active_commits:
-            ref_time = active_commits[-1].timestamp
+            ref_time = _to_utc(active_commits[-1].timestamp)
         else:
             ref_time = datetime.now(timezone.utc)
 
