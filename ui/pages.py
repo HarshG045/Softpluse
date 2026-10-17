@@ -1,6 +1,8 @@
 """
 UI Pages: Refined, developer-tool analytical and experimental dashboards for SoftwarePulse.
 """
+from pathlib import Path
+import textwrap
 from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
@@ -19,7 +21,7 @@ from ml.predict import ComponentRiskProfile, PredictionResult, RiskPredictor
 from ml.train import ClassifierAlgorithm, TrainedModelBundle
 from simulation.what_if import SimulationChangeType, WhatIfEngine
 from visualization.component_view import create_feature_comparison_chart, create_signal_bar_chart
-from visualization.dependency_graph import create_interactive_dependency_figure
+from visualization.dependency_graph import create_interactive_dependency_figure, create_architecture_overview_figure
 from visualization.evolution_charts import create_component_evolution_chart, create_snapshot_metric_timeline
 from visualization.risk_charts import create_risk_distribution_chart, create_risk_gauge_chart, create_top_risky_components_chart
 from .components import render_export_section, render_metric_card, render_risk_pill, render_scientific_disclaimer
@@ -366,58 +368,561 @@ def render_dependencies_page(
     dep_graph: DependencyGraph,
     pred_res: PredictionResult
 ):
-    """Renders the granular component-level dependency network graph and direct import tracing."""
-    st.markdown("## Component Dependency Graph")
-    st.caption("Explore granular component-level coupling, incoming/outgoing directed imports, and neighborhood topologies.")
+    """
+    Renders the redesigned Component Dependency Graph & Architecture Explorer.
+    Features:
+      - Two distinct modes: Architecture Overview (Subsystems) & Component Explorer (Granular)
+      - Left-to-right hierarchical 3-level directed dependency layouts with directional arrows
+      - Integrated toolbar with search autocomplete, layout selection, depth, direction, and risk filters
+      - Interactive component details panel with upstream/downstream navigation and circular dependency alerts
+      - Synchronized Component In/Out Dependency Matrix
+    """
+    st.markdown("## Component Dependency Graph & Architecture Explorer")
+    st.caption("Interactive software architecture explorer: trace upstream dependencies, downstream dependents, circular cycles, and coupling hotspots.")
 
     g = dep_graph.graph
     all_nodes = sorted(list(g.nodes)) if g.number_of_nodes() > 0 else []
 
     if not all_nodes:
-        st.info("No dependency architecture found.")
+        st.info("No dependency architecture found in the ingested repository.")
         return
 
-    # Controls placed clearly above the graph
-    g1, g2 = st.columns([1.5, 1])
-    with g1:
-        selected_focus = st.selectbox(
-            "Focus Neighborhood on Component",
-            options=["ALL (Repository-wide)"] + all_nodes,
-            index=0
-        )
-    with g2:
-        filter_risky_only = st.checkbox("Highlight High-Risk Components", value=True)
+    # 1. Initialize State Variables
+    if "dep_selected_component" not in st.session_state:
+        st.session_state["dep_selected_component"] = None
+    if "dep_view_mode" not in st.session_state:
+        st.session_state["dep_view_mode"] = "Architecture Overview"
+    if "dep_layout" not in st.session_state:
+        st.session_state["dep_layout"] = "Hierarchical"
+    if "dep_depth" not in st.session_state:
+        st.session_state["dep_depth"] = 1
+    if "dep_dir_filter" not in st.session_state:
+        st.session_state["dep_dir_filter"] = "Both"
+    if "dep_risk_filter" not in st.session_state:
+        st.session_state["dep_risk_filter"] = "All"
+    if "dep_label_mode" not in st.session_state:
+        st.session_state["dep_label_mode"] = "Full"
+    if "dep_highlight_risk" not in st.session_state:
+        st.session_state["dep_highlight_risk"] = True
+    if "dep_history" not in st.session_state:
+        st.session_state["dep_history"] = []
 
-    focus_target = None if selected_focus == "ALL (Repository-wide)" else selected_focus
-
-    # Prominent Interactive Network Graph
-    fig_graph = create_interactive_dependency_figure(
-        dep_graph=dep_graph,
-        risk_profiles_map={p.filepath: p.to_dict() for p in pred_res.profiles},
-        focus_component=focus_target,
-        max_nodes=60
-    )
-    st.plotly_chart(fig_graph, use_container_width=True)
-
-    # Component-level Import Tracing Table
-    st.markdown("### Component In/Out Dependency Matrix")
+    # Detect cycles and hotspots for metrics
+    cycles = dep_graph.detect_cycles()
+    hotspots = dep_graph.get_architectural_hotspots()
     struct_map = dep_graph.get_metrics_for_all()
-    rows = []
+    risk_map = {p.filepath: p.to_dict() for p in pred_res.profiles}
+
+    # 2. Top Metric Cards
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        render_metric_card("Total Components", str(len(all_nodes)), "Analyzed Python files")
+    with m2:
+        render_metric_card("Dependency Edges", str(g.number_of_edges()), "Intra-repository import links")
+    with m3:
+        high_c = pred_res.high_risk_count
+        med_c = pred_res.medium_risk_count
+        render_metric_card("High-Risk Components", str(high_c), f"{high_c} high • {med_c} medium risk")
+    with m4:
+        cycle_txt = f"{len(cycles)} Detected" if cycles else "0 (Acyclic DAG)"
+        render_metric_card("Circular Dependencies", cycle_txt, "Architecture cycle analysis")
+
+    st.markdown("<div style='margin-top: 14px;'></div>", unsafe_allow_html=True)
+
+    # 3. Breadcrumbs Navigation
+    selected_comp = st.session_state.get("dep_selected_component")
+    b_col1, b_col2 = st.columns([3, 1])
+    with b_col1:
+        if selected_comp:
+            st.markdown(
+                f"""
+                <div class="dep-breadcrumb-bar">
+                    <span style="color: #8b949e;">Architecture</span>
+                    <span class="dep-breadcrumb-sep">›</span>
+                    <span style="color: #8b949e;">Component Explorer</span>
+                    <span class="dep-breadcrumb-sep">›</span>
+                    <span class="dep-breadcrumb-item">{selected_comp}</span>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                """
+                <div class="dep-breadcrumb-bar">
+                    <span class="dep-breadcrumb-item">Repository Architecture Overview</span>
+                    <span class="dep-breadcrumb-sep">›</span>
+                    <span style="color: #8b949e;">All Subsystem Packages</span>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    with b_col2:
+        if selected_comp:
+            if st.button("Reset to Overview", key="dep_btn_reset_bread", use_container_width=True):
+                st.session_state["dep_selected_component"] = None
+                st.session_state["dep_view_mode"] = "Architecture Overview"
+                st.rerun()
+
+    # 4. Redesigned Graph Toolbar Box
+    st.markdown("<div class='dep-toolbar-box'>", unsafe_allow_html=True)
+
+    t_r1_c1, t_r1_c2, t_r1_c3, t_r1_c4 = st.columns([1.3, 1.8, 1.2, 1.1])
+    with t_r1_c1:
+        view_modes = ["Architecture Overview", "Component Explorer"]
+        mode_idx = 1 if st.session_state["dep_view_mode"] == "Component Explorer" else 0
+        new_mode = st.radio(
+            "Graph View Mode",
+            options=view_modes,
+            index=mode_idx,
+            horizontal=True,
+            key="dep_view_mode_radio"
+        )
+        if new_mode != st.session_state["dep_view_mode"]:
+            st.session_state["dep_view_mode"] = new_mode
+            st.rerun()
+
+    with t_r1_c2:
+        # Search with autocomplete
+        comp_display_options = ["-- Select / Search Component --"] + all_nodes
+        search_idx = 0
+        if selected_comp and selected_comp in all_nodes:
+            search_idx = all_nodes.index(selected_comp) + 1
+
+        def format_comp_opt(x: str) -> str:
+            if x == "-- Select / Search Component --":
+                return x
+            prof = pred_res.profiles_by_path.get(x)
+            cat = prof.risk_category if prof else "LOW"
+            tag = f"[{cat}]"
+            return f"{tag} {x}"
+
+        selected_from_search = st.selectbox(
+            "Component Search (Autocomplete)",
+            options=comp_display_options,
+            index=search_idx,
+            format_func=format_comp_opt,
+            key="dep_search_box"
+        )
+        if selected_from_search != "-- Select / Search Component --" and selected_from_search != selected_comp:
+            st.session_state["dep_selected_component"] = selected_from_search
+            st.session_state["dep_view_mode"] = "Component Explorer"
+            if selected_from_search not in st.session_state["dep_history"]:
+                st.session_state["dep_history"].append(selected_from_search)
+            st.rerun()
+
+    with t_r1_c3:
+        if st.session_state["dep_view_mode"] == "Component Explorer":
+            layout_options = ["Hierarchical", "Radial", "Grouped"]
+            cur_layout_idx = layout_options.index(st.session_state["dep_layout"]) if st.session_state["dep_layout"] in layout_options else 0
+            new_layout = st.selectbox("Layout Algorithm", options=layout_options, index=cur_layout_idx, key="dep_layout_select")
+            st.session_state["dep_layout"] = new_layout
+        else:
+            st.selectbox("Layout Algorithm", options=["Subsystem Packages (Inter-module)"], index=0, disabled=True)
+
+    with t_r1_c4:
+        if st.session_state["dep_view_mode"] == "Component Explorer":
+            depth_options = [1, 2, 3]
+            cur_depth_idx = depth_options.index(st.session_state["dep_depth"]) if st.session_state["dep_depth"] in depth_options else 0
+            new_depth = st.selectbox("Neighborhood Depth", options=depth_options, index=cur_depth_idx, format_func=lambda d: f"{d} Hop{'s' if d > 1 else ''}", key="dep_depth_select")
+            st.session_state["dep_depth"] = new_depth
+        else:
+            st.selectbox("Neighborhood Depth", options=["Cluster-wide"], index=0, disabled=True)
+
+    # Toolbar Row 2: Direction, Risk Filter, Labels, and Toggles
+    t_r2_c1, t_r2_c2, t_r2_c3, t_r2_c4, t_r2_c5 = st.columns([1.2, 1.1, 1.1, 1.2, 0.9])
+    with t_r2_c1:
+        if st.session_state["dep_view_mode"] == "Component Explorer":
+            dir_options = ["Both", "Dependencies", "Dependents"]
+            cur_dir_idx = dir_options.index(st.session_state["dep_dir_filter"]) if st.session_state["dep_dir_filter"] in dir_options else 0
+            new_dir = st.selectbox("Direction Filter", options=dir_options, index=cur_dir_idx, format_func=lambda d: f"{d} {'(In & Out)' if d == 'Both' else '(Outgoing)' if d == 'Dependencies' else '(Incoming)'}", key="dep_dir_select")
+            st.session_state["dep_dir_filter"] = new_dir
+        else:
+            st.selectbox("Direction Filter", options=["All Connections"], index=0, disabled=True)
+
+    with t_r2_c2:
+        risk_filter_options = ["All", "High", "Medium", "Low"]
+        cur_rf_idx = risk_filter_options.index(st.session_state["dep_risk_filter"]) if st.session_state["dep_risk_filter"] in risk_filter_options else 0
+        new_risk_filter = st.selectbox("Risk Filter", options=risk_filter_options, index=cur_rf_idx, format_func=lambda r: f"{r} Risk", key="dep_risk_filter_select")
+        st.session_state["dep_risk_filter"] = new_risk_filter
+
+    with t_r2_c3:
+        label_options = ["Full", "Truncated", "Hover"]
+        cur_lbl_idx = label_options.index(st.session_state["dep_label_mode"]) if st.session_state["dep_label_mode"] in label_options else 0
+        new_label_mode = st.selectbox("Node Labels", options=label_options, index=cur_lbl_idx, format_func=lambda l: f"{l} Labels", key="dep_label_select")
+        st.session_state["dep_label_mode"] = new_label_mode
+
+    with t_r2_c4:
+        st.markdown("<div style='margin-top: 24px;'></div>", unsafe_allow_html=True)
+        high_risk_checked = st.checkbox("Highlight High Risk", value=st.session_state["dep_highlight_risk"], key="dep_hl_risk_check")
+        st.session_state["dep_highlight_risk"] = high_risk_checked
+
+    with t_r2_c5:
+        st.markdown("<div style='margin-top: 20px;'></div>", unsafe_allow_html=True)
+        if st.button("Reset View", key="dep_btn_full_reset", use_container_width=True):
+            st.session_state["dep_selected_component"] = None
+            st.session_state["dep_view_mode"] = "Architecture Overview"
+            st.session_state["dep_layout"] = "Hierarchical"
+            st.session_state["dep_depth"] = 1
+            st.session_state["dep_dir_filter"] = "Both"
+            st.session_state["dep_risk_filter"] = "All"
+            st.session_state["dep_label_mode"] = "Full"
+            st.session_state["dep_highlight_risk"] = True
+            st.session_state["dep_history"] = []
+            st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # 5. Compact Graph Legend Bar
+    st.markdown(
+        """
+        <div class="dep-legend-container">
+            <span style="font-weight: 600; color: #f0f6fc;">Legend:</span>
+            <div class="dep-legend-item">
+                <span class="dep-legend-dot" style="background-color: #2ea043;"></span>
+                <span>Low Risk [L]</span>
+            </div>
+            <div class="dep-legend-item">
+                <span class="dep-legend-dot" style="background-color: #d29922;"></span>
+                <span>Medium Risk [M]</span>
+            </div>
+            <div class="dep-legend-item">
+                <span class="dep-legend-dot" style="background-color: #f85149;"></span>
+                <span>High Risk [H]</span>
+            </div>
+            <div class="dep-legend-item">
+                <span class="dep-legend-dot" style="background-color: #58a6ff; border: 2px solid #ffffff;"></span>
+                <span>Focused Component</span>
+            </div>
+            <div class="dep-legend-item">
+                <span class="dep-legend-line" style="background-color: #58a6ff;"></span>
+                <span>Outgoing Dependency (Imports) ➔</span>
+            </div>
+            <div class="dep-legend-item">
+                <span class="dep-legend-line" style="background-color: #a371f7;"></span>
+                <span>Incoming Dependent (Imported by) ➔</span>
+            </div>
+            <div class="dep-legend-item">
+                <span class="dep-legend-line" style="background-color: #f85149; border-top: 2px dashed #f85149; height: 0;"></span>
+                <span>⚠️ Circular Dependency</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    # 6. Main Canvas + Side Information Panel
+    col_graph, col_panel = st.columns([2.2, 1.0])
+
+    with col_graph:
+        if st.session_state["dep_view_mode"] == "Architecture Overview":
+            # Mode A: Architecture Overview Figure
+            fig_arch = create_architecture_overview_figure(
+                dep_graph=dep_graph,
+                risk_profiles_map=risk_map
+            )
+            st.plotly_chart(fig_arch, use_container_width=True)
+            st.caption("Subsystem Architecture Overview: Aggregated package-to-package dependency relationships and component counts.")
+
+        else:
+            # Mode B: Component Explorer Figure
+            fig_comp = create_interactive_dependency_figure(
+                dep_graph=dep_graph,
+                risk_profiles_map=risk_map,
+                focus_component=selected_comp,
+                max_nodes=60,
+                layout_type=st.session_state["dep_layout"].lower(),
+                depth=st.session_state["dep_depth"],
+                direction_filter=st.session_state["dep_dir_filter"].lower(),
+                risk_filter=st.session_state["dep_risk_filter"].lower(),
+                show_labels=st.session_state["dep_label_mode"].lower(),
+                highlight_risk=st.session_state["dep_highlight_risk"]
+            )
+            st.plotly_chart(fig_comp, use_container_width=True)
+            if selected_comp:
+                st.caption(f"Hierarchical neighborhood for: **{selected_comp}** (Depth: {st.session_state['dep_depth']} hop(s), Direction: {st.session_state['dep_dir_filter']})")
+            else:
+                st.caption("Repository-wide directed component topology. Select any component to enter focused 3-level view.")
+
+    with col_panel:
+        # Supporting Details Panel
+        if st.session_state["dep_view_mode"] == "Architecture Overview":
+            # Panel for Mode A: Subsystem Packages Breakdown
+            st.markdown(
+                textwrap.dedent("""
+                <div class="dep-panel-card">
+                    <div class="dep-panel-title">
+                        <span>Subsystem Packages</span>
+                        <span style="font-size: 11px; color: #8b949e;">Modular Clusters</span>
+                    </div>
+                    <div class="dep-panel-sub">Directory-level coupling and stability metrics</div>
+                </div>
+                """),
+                unsafe_allow_html=True
+            )
+
+            pkg_clusters = dep_graph.get_package_clusters()
+            for pkg_name, pdata in sorted(pkg_clusters.items()):
+                cnt = pdata["component_count"]
+                instab = pdata["instability_index"]
+                ca = pdata["afferent_coupling_ca"]
+                ce = pdata["efferent_coupling_ce"]
+
+                instab_color = "#3fb950" if instab <= 0.3 else ("#f85149" if instab >= 0.7 else "#d29922")
+
+                st.markdown(
+                    textwrap.dedent(f"""
+                    <div class="dep-item-row" style="margin-top: 8px;">
+                        <div>
+                            <b style="color: #f0f6fc;">{pkg_name}/</b>
+                            <span style="color: #8b949e; font-size: 11px;"> ({cnt} files)</span>
+                        </div>
+                        <div style="font-size: 11px; color: {instab_color}; font-weight: 600;">
+                            I = {instab:.2f}
+                        </div>
+                    </div>
+                    <div style="font-size: 10px; color: #8b949e; padding-left: 6px; margin-bottom: 6px;">
+                        Ca: {ca} (incoming) • Ce: {ce} (outgoing)
+                    </div>
+                    """),
+                    unsafe_allow_html=True
+                )
+
+                # Expandable components inside package
+                with st.expander(f"View {pkg_name} files ({cnt})", expanded=False):
+                    for comp in pdata["components"]:
+                        prof = pred_res.profiles_by_path.get(comp)
+                        c_risk = prof.risk_percentage if prof else 0
+                        c_cat = prof.risk_category if prof else "LOW"
+                        pill_html = render_risk_pill(c_risk, c_cat)
+                        c_col1, c_col2 = st.columns([2, 1])
+                        with c_col1:
+                            st.markdown(f"<div style='font-size: 11px; font-family: monospace;'>{Path(comp).name}</div>", unsafe_allow_html=True)
+                        with c_col2:
+                            if st.button("Inspect", key=f"pkg_btn_{comp}", use_container_width=True):
+                                st.session_state["dep_selected_component"] = comp
+                                st.session_state["dep_view_mode"] = "Component Explorer"
+                                st.rerun()
+
+        elif selected_comp and selected_comp in struct_map:
+            # Panel for Mode B: Focused Component Details Panel
+            sm = struct_map[selected_comp]
+            prof = pred_res.profiles_by_path.get(selected_comp)
+            risk_pct = prof.risk_percentage if prof else 0
+            risk_cat = prof.risk_category if prof else "LOW"
+            pill_html = render_risk_pill(risk_pct, risk_cat)
+
+            st.markdown(
+                textwrap.dedent(f"""<div class="dep-panel-card">
+<div class="dep-panel-title"><span>{Path(selected_comp).name}</span>{pill_html}</div>
+<div class="dep-panel-sub">{selected_comp}</div>
+<div class="dep-stat-grid">
+<div class="dep-stat-item"><div class="dep-stat-label">Dependencies (Out)</div><div class="dep-stat-val" style="color: #58a6ff;">{sm.out_degree}</div></div>
+<div class="dep-stat-item"><div class="dep-stat-label">Dependents (In)</div><div class="dep-stat-val" style="color: #a371f7;">{sm.in_degree}</div></div>
+<div class="dep-stat-item"><div class="dep-stat-label">Total Degree</div><div class="dep-stat-val">{sm.degree}</div></div>
+<div class="dep-stat-item"><div class="dep-stat-label">Centrality</div><div class="dep-stat-val">{round(sm.centrality, 3)}</div></div>
+</div>
+</div>"""),
+                unsafe_allow_html=True
+            )
+
+            # Circular Dependency Check
+            comp_cycles = [cyc for cyc in cycles if selected_comp in cyc]
+            if comp_cycles:
+                cyc_path = " ➔ ".join([Path(c).name for c in comp_cycles[0]] + [Path(comp_cycles[0][0]).name])
+                st.markdown(
+                    textwrap.dedent(f"""
+                    <div class="dep-alert-box">
+                        <b>⚠️ Circular Dependency Detected</b><br>
+                        <span style="font-family: monospace; font-size: 11px;">{cyc_path}</span>
+                    </div>
+                    """),
+                    unsafe_allow_html=True
+                )
+
+            # Connected High-Risk Neighbors Alert
+            all_neighbors = set(sm.direct_dependencies + sm.direct_dependents)
+            risky_neighbors = [
+                n for n in all_neighbors
+                if (pred_res.profiles_by_path.get(n) and pred_res.profiles_by_path.get(n).risk_category == "HIGH")
+            ]
+            if risky_neighbors:
+                risky_names = ", ".join([Path(n).name for n in risky_neighbors])
+                st.markdown(
+                    textwrap.dedent(f"""
+                    <div class="dep-alert-box">
+                        <b>Coupling Hotspot Notice:</b> Connected to high-risk component(s): <b>{risky_names}</b>.
+                    </div>
+                    """),
+                    unsafe_allow_html=True
+                )
+
+            # Upstream Dependencies (Imports)
+            st.markdown(f"<div class='dep-section-label'>Upstream Dependencies (Imports: {len(sm.direct_dependencies)})</div>", unsafe_allow_html=True)
+            if sm.direct_dependencies:
+                for dep in sm.direct_dependencies:
+                    d_prof = pred_res.profiles_by_path.get(dep)
+                    d_risk = d_prof.risk_percentage if d_prof else 0
+                    d_cat = d_prof.risk_category if d_prof else "LOW"
+                    d_pill = render_risk_pill(d_risk, d_cat)
+                    d_col1, d_col2 = st.columns([2.2, 1.0])
+                    with d_col1:
+                        st.markdown(f"<div style='font-size: 12px; font-family: monospace;'>• {Path(dep).name} {d_pill}</div>", unsafe_allow_html=True)
+                    with d_col2:
+                        if st.button("Focus", key=f"foc_dep_{dep}", use_container_width=True):
+                            st.session_state["dep_selected_component"] = dep
+                            if dep not in st.session_state["dep_history"]:
+                                st.session_state["dep_history"].append(dep)
+                            st.rerun()
+            else:
+                st.markdown("<div style='font-size: 11px; color: #8b949e; padding-left: 4px;'>No outgoing dependencies (leaf/root provider).</div>", unsafe_allow_html=True)
+
+            # Downstream Dependents (Imported by)
+            st.markdown(f"<div class='dep-section-label'>Downstream Dependents (Consumers: {len(sm.direct_dependents)})</div>", unsafe_allow_html=True)
+            if sm.direct_dependents:
+                for dept in sm.direct_dependents:
+                    dt_prof = pred_res.profiles_by_path.get(dept)
+                    dt_risk = dt_prof.risk_percentage if dt_prof else 0
+                    dt_cat = dt_prof.risk_category if dt_prof else "LOW"
+                    dt_pill = render_risk_pill(dt_risk, dt_cat)
+                    dt_col1, dt_col2 = st.columns([2.2, 1.0])
+                    with dt_col1:
+                        st.markdown(f"<div style='font-size: 12px; font-family: monospace;'>• {Path(dept).name} {dt_pill}</div>", unsafe_allow_html=True)
+                    with dt_col2:
+                        if st.button("Focus", key=f"foc_dept_{dept}", use_container_width=True):
+                            st.session_state["dep_selected_component"] = dept
+                            if dept not in st.session_state["dep_history"]:
+                                st.session_state["dep_history"].append(dept)
+                            st.rerun()
+            else:
+                st.markdown("<div style='font-size: 11px; color: #8b949e; padding-left: 4px;'>No incoming dependents (top-level consumer/entrypoint).</div>", unsafe_allow_html=True)
+
+            # Available Actions
+            st.markdown("<div class='dep-section-label'>Available Actions</div>", unsafe_allow_html=True)
+            act_col1, act_col2 = st.columns(2)
+            with act_col1:
+                cur_d = st.session_state["dep_depth"]
+                next_d = 2 if cur_d == 1 else (3 if cur_d == 2 else 1)
+                lbl_d = f"Expand to {next_d}-Hop" if next_d > 1 else "Reset to 1-Hop"
+                if st.button(lbl_d, key="dep_btn_toggle_depth", use_container_width=True):
+                    st.session_state["dep_depth"] = next_d
+                    st.rerun()
+            with act_col2:
+                cur_dir = st.session_state["dep_dir_filter"]
+                lbl_dir = "Deps Only" if cur_dir == "Both" else ("Dependents" if cur_dir == "Dependencies" else "Show Both")
+                next_dir = "Dependencies" if cur_dir == "Both" else ("Dependents" if cur_dir == "Dependencies" else "Both")
+                if st.button(lbl_dir, key="dep_btn_toggle_dir", use_container_width=True):
+                    st.session_state["dep_dir_filter"] = next_dir
+                    st.rerun()
+
+        else:
+            # Panel when in Component Explorer but no component is selected yet
+            st.markdown(
+                textwrap.dedent("""
+                <div class="dep-panel-card">
+                    <div class="dep-panel-title">
+                        <span>Component Explorer</span>
+                        <span style="font-size: 11px; color: #8b949e;">Quick-Start</span>
+                    </div>
+                    <div class="dep-panel-sub">Select any file to trace its 3-level upstream & downstream dependencies.</div>
+                    
+                    <div class="dep-info-box">
+                        💡 <b>Tip:</b> Choose a suggested high-impact component below or search for a specific file in the toolbar above.
+                    </div>
+                </div>
+                """),
+                unsafe_allow_html=True
+            )
+
+            # Suggested High-Risk Components
+            high_risk_nodes = [
+                p.filepath for p in pred_res.profiles
+                if p.risk_category == "HIGH"
+            ]
+            if high_risk_nodes:
+                st.markdown("<div class='dep-section-label'>Suggested High-Risk Components</div>", unsafe_allow_html=True)
+                for hr_node in high_risk_nodes[:3]:
+                    prof = pred_res.profiles_by_path.get(hr_node)
+                    risk_val = prof.risk_percentage if prof else 0
+                    c1, c2 = st.columns([2, 1])
+                    with c1:
+                        st.markdown(f"<div style='font-size: 12px; font-family: monospace;'>{Path(hr_node).name} ({risk_val}%)</div>", unsafe_allow_html=True)
+                    with c2:
+                        if st.button("Explore", key=f"sug_hr_{hr_node}", use_container_width=True):
+                            st.session_state["dep_selected_component"] = hr_node
+                            st.rerun()
+
+            # Suggested Architectural Hubs
+            top_hubs = [h["component"] for h in hotspots[:3] if h["component"] not in high_risk_nodes]
+            if top_hubs:
+                st.markdown("<div class='dep-section-label'>Suggested Architectural Hubs</div>", unsafe_allow_html=True)
+                for hub_node in top_hubs:
+                    deg = struct_map[hub_node].degree if hub_node in struct_map else 0
+                    c1, c2 = st.columns([2, 1])
+                    with c1:
+                        st.markdown(f"<div style='font-size: 12px; font-family: monospace;'>{Path(hub_node).name} ({deg} links)</div>", unsafe_allow_html=True)
+                    with c2:
+                        if st.button("Explore", key=f"sug_hub_{hub_node}", use_container_width=True):
+                            st.session_state["dep_selected_component"] = hub_node
+                            st.rerun()
+
+    st.markdown("<hr style='border-color: #21262d; margin: 24px 0;'>", unsafe_allow_html=True)
+
+    # 7. Synchronized Component In/Out Dependency Matrix
+    st.markdown("### Component In/Out Dependency Matrix")
+    st.caption("Coupling metrics and import tracing table. Filtered dynamically by active toolbar settings. Focus any component to view in graph.")
+
+    matrix_rows = []
+    active_risk_filt = st.session_state["dep_risk_filter"]
+
     for node, sm in struct_map.items():
         prof = pred_res.profiles_by_path.get(node)
-        rows.append({
+        cat = prof.risk_category if prof else "LOW"
+        pct = prof.risk_percentage if prof else 0
+
+        # Filter by risk if set
+        if active_risk_filt != "All" and cat != active_risk_filt.upper():
+            continue
+
+        is_focused = (selected_comp == node)
+        matrix_rows.append({
+            "Focus Status": "★ ACTIVE FOCUS" if is_focused else "",
             "Component": node,
-            "Risk (%)": f"{prof.risk_percentage}%" if prof else "-",
-            "Category": prof.risk_category if prof else "-",
+            "Risk (%)": f"{pct}%",
+            "Category": cat,
             "Outgoing (Dependencies)": sm.out_degree,
             "Incoming (Dependents)": sm.in_degree,
             "Total Degree": sm.degree,
             "Degree Centrality": round(sm.centrality, 4),
-            "Direct Dependencies": ", ".join(sm.direct_dependencies) or "None"
+            "Direct Dependencies": ", ".join([Path(d).name for d in sm.direct_dependencies]) or "None",
+            "Direct Dependents": ", ".join([Path(d).name for d in sm.direct_dependents]) or "None"
         })
 
-    df_struct = pd.DataFrame(rows).sort_values(by="Total Degree", ascending=False)
-    st.dataframe(df_struct, use_container_width=True, hide_index=True)
+    if matrix_rows:
+        df_struct = pd.DataFrame(matrix_rows).sort_values(by="Total Degree", ascending=False)
+        st.dataframe(df_struct, use_container_width=True, hide_index=True)
+
+        # Quick Focus selector below table for direct synchronization
+        tbl_col1, tbl_col2 = st.columns([2.5, 1.2])
+        with tbl_col1:
+            tbl_target = st.selectbox(
+                "Focus Component from Matrix",
+                options=["-- Select component to focus in graph --"] + [r["Component"] for r in matrix_rows],
+                index=0,
+                key="dep_matrix_focus_select"
+            )
+        with tbl_col2:
+            st.markdown("<div style='margin-top: 24px;'></div>", unsafe_allow_html=True)
+            if st.button("Focus Selected", key="dep_btn_focus_matrix", use_container_width=True):
+                if tbl_target != "-- Select component to focus in graph --":
+                    st.session_state["dep_selected_component"] = tbl_target
+                    st.session_state["dep_view_mode"] = "Component Explorer"
+                    if tbl_target not in st.session_state["dep_history"]:
+                        st.session_state["dep_history"].append(tbl_target)
+                    st.rerun()
+    else:
+        st.info("No components match the active filter criteria.")
+
 
 
 
