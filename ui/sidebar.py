@@ -18,6 +18,7 @@ class NavigationPage(str, Enum):
     RISK_EXPLORER = "Risk Explorer"
     ARCHITECTURE = "Architecture"
     EVOLUTION = "Evolution"
+    ARCH_EVOLUTION = "Architecture Evolution"
     GIT_ACTIVITY = "Git Activity"
     DEPENDENCIES = "Dependencies"
     EXPLAINABILITY = "Explainability"
@@ -34,6 +35,7 @@ NAV_SECTIONS = [
             {"id": NavigationPage.RISK_EXPLORER, "label": "Risk Explorer", "icon": "◉"},
             {"id": NavigationPage.ARCHITECTURE, "label": "Architecture", "icon": "◈"},
             {"id": NavigationPage.EVOLUTION, "label": "Evolution", "icon": "↗"},
+            {"id": NavigationPage.ARCH_EVOLUTION, "label": "Architecture Evolution", "icon": "⏪"},
             {"id": NavigationPage.GIT_ACTIVITY, "label": "Git Activity", "icon": "↗"},
             {"id": NavigationPage.DEPENDENCIES, "label": "Dependencies", "icon": "⌘"},
         ]

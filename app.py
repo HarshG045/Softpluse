@@ -40,6 +40,7 @@ from ui.pages import (
     render_settings_page,
     render_what_if_lab_page,
 )
+from ui.pages_arch_evolution import render_arch_evolution_page
 from ui.sidebar import NavigationPage, render_sidebar
 from ui.styles import get_custom_css
 
@@ -193,6 +194,15 @@ def main():
 
     elif selected_page == NavigationPage.EVOLUTION:
         render_evolution_page(data["snapshots"], data["predictions_res"])
+
+    elif selected_page == NavigationPage.ARCH_EVOLUTION:
+        render_arch_evolution_page(
+            git_loader=data["git_loader"],
+            commits=data["commits"],
+            model_bundle=data["model_bundle"],
+            current_pred_res=data["predictions_res"],
+            current_dep_graph=data["dep_graph"]
+        )
 
     elif selected_page == NavigationPage.GIT_ACTIVITY:
         render_git_activity_page(
