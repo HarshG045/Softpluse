@@ -16,3 +16,5 @@ data/processed/*
 .DS_Store
 .idea/
 .vscode/
+.agents/
+.claude/

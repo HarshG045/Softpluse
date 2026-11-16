@@ -830,3 +830,253 @@ def create_interactive_dependency_figure(
     )
 
     return fig
+
+
+def create_risk_propagation_figure(
+    dep_graph: DependencyGraph,
+    source_component: str,
+    source_risk_pct: int,
+    risk_profiles_map: Optional[Dict[str, Dict]] = None,
+    max_depth: int = 3
+) -> Tuple[go.Figure, Dict[str, float]]:
+    """
+    Renders an experimental Risk Propagation blast-radius visualization.
+    Shows the cascade of downstream dependent modules that import source_component,
+    weighted by propagation depth.
+
+    Formula:
+      ImpactScore(d) = SourceRisk * (1.0 / (depth(d) + 1))
+
+    DISCLAIMER:
+      Estimates potential architectural exposure based on dependency depth;
+      does not claim direct component failure.
+    """
+    g = dep_graph.graph
+    impact_scores: Dict[str, float] = {source_component: float(source_risk_pct)}
+
+    if not g.has_node(source_component):
+        fig = go.Figure()
+        fig.update_layout(**DARK_LAYOUT, title=f"Component {source_component} not found in dependency graph.")
+        return fig, impact_scores
+
+    # BFS across predecessors (dependents: modules importing source)
+    cascade_nodes = {source_component}
+    node_depths = {source_component: 0}
+    curr_level = {source_component}
+
+    for d in range(1, max_depth + 1):
+        next_level = set()
+        for node in curr_level:
+            for pred in g.predecessors(node):
+                if pred not in node_depths:
+                    node_depths[pred] = d
+                    next_level.add(pred)
+                    cascade_nodes.add(pred)
+                    # Compute attenuated impact score
+                    attenuation = 1.0 / (d + 1)
+                    pred_risk = (risk_profiles_map or {}).get(pred, {}).get("risk_percentage", 20)
+                    combined_impact = round(source_risk_pct * attenuation * 0.7 + pred_risk * 0.3, 1)
+                    impact_scores[pred] = combined_impact
+        curr_level = next_level
+        if not curr_level:
+            break
+
+    sub_g = g.subgraph(cascade_nodes).copy()
+
+    # Layout: arrange left-to-right by depth
+    pos: Dict[str, Tuple[float, float]] = {}
+    depth_groups: Dict[int, List[str]] = {}
+    for n, d in node_depths.items():
+        depth_groups.setdefault(d, []).append(n)
+
+    for d, nodes in depth_groups.items():
+        x = d * 2.5
+        nodes.sort()
+        k = len(nodes)
+        for idx, n in enumerate(nodes):
+            y = 0.0 if k == 1 else (idx - (k - 1) / 2.0) * 1.5
+            pos[n] = (x, y)
+
+    fig = go.Figure()
+
+    # Draw cascade edges
+    for u, v in sub_g.edges():
+        if u not in pos or v not in pos:
+            continue
+        x0, y0 = pos[u]
+        x1, y1 = pos[v]
+        dx = x1 - x0
+        dy = y1 - y0
+        dist = np.sqrt(dx * dx + dy * dy)
+        offset = 0.15 if dist > 0.001 else 0
+        fig.add_annotation(
+            x=x1 - dx * offset, y=y1 - dy * offset,
+            ax=x0 + dx * offset, ay=y0 + dy * offset,
+            xref="x", yref="y",
+            axref="x", ayref="y",
+            showarrow=True,
+            arrowhead=3,
+            arrowsize=1.2,
+            arrowwidth=2.0,
+            arrowcolor="#ff7b72",
+            opacity=0.85
+        )
+
+    # Draw nodes
+    node_x = [pos[n][0] for n in sub_g.nodes()]
+    node_y = [pos[n][1] for n in sub_g.nodes()]
+    node_colors = []
+    node_labels = []
+    hover_texts = []
+
+    for n in sub_g.nodes():
+        d = node_depths.get(n, 0)
+        score = impact_scores.get(n, 0.0)
+        stem = Path(n).name
+        if d == 0:
+            node_colors.append("#f85149")
+            node_labels.append(f"<b>★ SOURCE</b><br>{stem}<br>({source_risk_pct}% risk)")
+            hover_texts.append(f"<b>Source Component: {n}</b><br>Predicted Risk: <b>{source_risk_pct}%</b>")
+        else:
+            color = "#ff7b72" if score >= 50 else ("#d29922" if score >= 30 else "#58a6ff")
+            node_colors.append(color)
+            node_labels.append(f"Depth {d}: {stem}<br>Exposure: {score}%")
+            hover_texts.append(
+                f"<b>Dependent Component: {n}</b><br>"
+                f"Propagation Depth: <b>{d} hop(s)</b><br>"
+                f"Estimated Architectural Exposure: <b>{score}%</b><br>"
+                f"<i>Imports upstream component directly or transitively</i>"
+            )
+
+    fig.add_trace(
+        go.Scatter(
+            x=node_x, y=node_y,
+            mode="markers+text",
+            marker=dict(size=24, color=node_colors, line=dict(width=2, color="#f0f6fc")),
+            text=node_labels,
+            textposition="top center",
+            textfont=dict(size=10, color="#f0f6fc", family="JetBrains Mono, monospace"),
+            hoverinfo="text",
+            hovertext=hover_texts
+        )
+    )
+
+    fig.update_layout(
+        **DARK_LAYOUT,
+        showlegend=False,
+        height=450,
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+    )
+
+    return fig, impact_scores
+
+
+def create_architecture_diff_figure(
+    baseline_graph: DependencyGraph,
+    comparison_graph: DependencyGraph,
+    baseline_label: str = "Baseline",
+    comparison_label: str = "Comparison"
+) -> go.Figure:
+    """
+    Renders an architectural diff between two dependency graphs (e.g. across two Git commits).
+    Visualizes:
+      - Added dependency edges (green)
+      - Removed dependency edges (red dashed)
+      - Persisting dependency edges (subtle grey)
+    """
+    bg = baseline_graph.graph
+    cg = comparison_graph.graph
+
+    base_edges = set(bg.edges())
+    comp_edges = set(cg.edges())
+
+    added_edges = comp_edges - base_edges
+    removed_edges = base_edges - comp_edges
+    common_edges = base_edges & comp_edges
+
+    all_nodes = sorted(list(set(bg.nodes()) | set(cg.nodes())))
+    combined_g = nx.DiGraph()
+    for n in all_nodes:
+        combined_g.add_node(n)
+
+    pos = compute_grouped_layout(combined_g) if len(all_nodes) > 1 else {n: (0.0, 0.0) for n in all_nodes}
+
+    fig = go.Figure()
+
+    # Common edges
+    for u, v in common_edges:
+        if u in pos and v in pos:
+            fig.add_annotation(
+                x=pos[v][0], y=pos[v][1],
+                ax=pos[u][0], ay=pos[u][1],
+                xref="x", yref="y", axref="x", ayref="y",
+                showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.0,
+                arrowcolor="#30363d", opacity=0.6
+            )
+
+    # Removed edges (red)
+    for u, v in removed_edges:
+        if u in pos and v in pos:
+            fig.add_annotation(
+                x=pos[v][0], y=pos[v][1],
+                ax=pos[u][0], ay=pos[u][1],
+                xref="x", yref="y", axref="x", ayref="y",
+                showarrow=True, arrowhead=3, arrowsize=1.2, arrowwidth=2.0,
+                arrowcolor="#f85149", opacity=0.9
+            )
+
+    # Added edges (green)
+    for u, v in added_edges:
+        if u in pos and v in pos:
+            fig.add_annotation(
+                x=pos[v][0], y=pos[v][1],
+                ax=pos[u][0], ay=pos[u][1],
+                xref="x", yref="y", axref="x", ayref="y",
+                showarrow=True, arrowhead=3, arrowsize=1.3, arrowwidth=2.5,
+                arrowcolor="#39d353", opacity=0.95
+            )
+
+    # Nodes
+    node_x = [pos[n][0] for n in all_nodes if n in pos]
+    node_y = [pos[n][1] for n in all_nodes if n in pos]
+    node_colors = []
+    node_text = []
+
+    for n in all_nodes:
+        if n in cg and n not in bg:
+            node_colors.append("#39d353")  # New component
+            node_text.append(f"[+NEW] {Path(n).name}")
+        elif n in bg and n not in cg:
+            node_colors.append("#f85149")  # Deleted component
+            node_text.append(f"[-DEL] {Path(n).name}")
+        else:
+            node_colors.append("#58a6ff")
+            node_text.append(Path(n).name)
+
+    fig.add_trace(
+        go.Scatter(
+            x=node_x, y=node_y,
+            mode="markers+text",
+            marker=dict(size=18, color=node_colors, line=dict(width=2, color="#161b22")),
+            text=node_text,
+            textposition="top center",
+            textfont=dict(size=10, color="#f0f6fc", family="JetBrains Mono, monospace"),
+            hoverinfo="text"
+        )
+    )
+
+    fig.update_layout(
+        **DARK_LAYOUT,
+        showlegend=False,
+        height=480,
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        title=dict(
+            text=f"Architecture Comparison: {baseline_label} ➔ {comparison_label} "
+                 f"(+{len(added_edges)} added, -{len(removed_edges)} removed)",
+            font=dict(size=12, color="#8b949e")
+        )
+    )
+
+    return fig

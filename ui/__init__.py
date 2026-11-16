@@ -8,6 +8,10 @@ from .header import render_header
 from .components import render_metric_card, render_risk_pill, render_scientific_disclaimer
 from .pages import (
     render_overview_page,
+    render_health_page,
+    render_recommendations_page,
+    render_pr_analyzer_page,
+    render_feature_ablation_page,
     render_risk_explorer_page,
     render_architecture_page,
     render_evolution_page,
@@ -27,6 +31,10 @@ __all__ = [
     "render_risk_pill",
     "render_scientific_disclaimer",
     "render_overview_page",
+    "render_health_page",
+    "render_recommendations_page",
+    "render_pr_analyzer_page",
+    "render_feature_ablation_page",
     "render_risk_explorer_page",
     "render_architecture_page",
     "render_evolution_page",

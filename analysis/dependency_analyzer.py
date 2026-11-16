@@ -196,6 +196,47 @@ class DependencyAnalyzer:
     def __init__(self, repo_path: Path):
         self.repo_path = repo_path.resolve()
 
+    @staticmethod
+    def build_graph_from_metrics(code_metrics_map: Dict[str, CodeMetrics]) -> DependencyGraph:
+        """Builds a dependency graph from a code metrics map without requiring a repo_path.
+
+        This enables historical dependency graph reconstruction from metrics
+        extracted via `git show` without checking out the commit.
+        The logic mirrors `build_graph` but operates solely on the provided metrics.
+        """
+        dep_graph = DependencyGraph()
+
+        # Add all known components
+        for fp in code_metrics_map.keys():
+            dep_graph.add_component(fp)
+
+        # Build lookup table: module name / stem / dotted path -> filepath
+        module_lookup: Dict[str, str] = {}
+        for fp in code_metrics_map.keys():
+            stem = Path(fp).stem
+            module_lookup[stem] = fp
+            dotted = fp.replace("/", ".").replace("\\", ".").replace(".py", "")
+            module_lookup[dotted] = fp
+            parts = Path(fp).parts
+            if len(parts) >= 2:
+                sub_dot = ".".join(parts).replace(".py", "")
+                module_lookup[sub_dot] = fp
+
+        # Connect dependencies based on imported modules
+        for source_fp, metrics in code_metrics_map.items():
+            for imp in metrics.imported_modules:
+                target_fp = module_lookup.get(imp)
+                if not target_fp:
+                    for k, v in module_lookup.items():
+                        if k.endswith(f".{imp}") or k == imp or imp.endswith(f".{k}"):
+                            target_fp = v
+                            break
+
+                if target_fp and target_fp != source_fp:
+                    dep_graph.add_dependency(source_fp, target_fp)
+
+        return dep_graph
+
     def build_graph(self, code_metrics_map: Dict[str, CodeMetrics]) -> DependencyGraph:
         """
         Builds a dependency graph from AST code metrics.

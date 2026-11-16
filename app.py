@@ -26,6 +26,10 @@ from ingestion.repository_loader import RepositoryLoader
 from ml.evaluate import ModelEvaluator
 from ml.predict import RiskPredictor
 from ml.train import ClassifierAlgorithm, ModelTrainer
+from experiments.ablation import FeatureAblationExperiment
+from health.health_score import RepositoryHealthScore
+from pull_requests.pr_risk_analyzer import PullRequestRiskAnalyzer
+from recommendations.recommendation_engine import IntelligentRecommendationEngine
 from simulation.what_if import WhatIfEngine
 from ui.header import render_header
 from ui.pages import (
@@ -33,9 +37,13 @@ from ui.pages import (
     render_dependencies_page,
     render_evolution_page,
     render_explainability_page,
+    render_feature_ablation_page,
     render_git_activity_page,
+    render_health_page,
     render_model_evaluation_page,
     render_overview_page,
+    render_pr_analyzer_page,
+    render_recommendations_page,
     render_risk_explorer_page,
     render_settings_page,
     render_what_if_lab_page,
@@ -90,12 +98,12 @@ def execute_repository_analysis(repo_input: str, is_demo: bool, algorithm: Class
 
         # Step 5: Historical Snapshots
         st.write("Reconstructing historical evolution snapshots...")
-        hist_analyzer = HistoricalAnalyzer(commits, code_map, dep_graph)
+        hist_analyzer = HistoricalAnalyzer(commits, code_map, dep_graph, repo_path=repo_path)
         snapshots = hist_analyzer.build_snapshots(num_snapshots=5)
 
         # Step 6: Feature Engineering & Leakage-Free Dataset Building
         st.write("Building temporal dataset and computing risk labels...")
-        builder = DatasetBuilder(commits, code_map, dep_graph)
+        builder = DatasetBuilder(commits, code_map, dep_graph, repo_path=repo_path)
         dataset = builder.build_dataset()
 
         # Step 7: Train ML Risk Prediction Model
@@ -118,6 +126,40 @@ def execute_repository_analysis(repo_input: str, is_demo: bool, algorithm: Class
         what_if_engine = WhatIfEngine(model_bundle, dep_graph)
         change_analyzer = ChangeImpactAnalyzer(model_bundle, dep_graph, predictions_res.profiles)
 
+        # Step 9: Advanced Health, Recommendations & PR Analyzer
+        st.write("Evaluating repository health dimensions and generating action recommendations...")
+        git_analyzer = GitAnalyzer(commits)
+        current_git_map = git_analyzer.get_git_metrics()
+        all_files = list(code_map.keys())
+
+        health_engine = RepositoryHealthScore()
+        health_report = health_engine.evaluate_repository(
+            code_metrics_map=code_map,
+            git_metrics_map=current_git_map,
+            dep_graph=dep_graph,
+            commits=commits,
+            pred_res=predictions_res,
+            all_files=all_files
+        )
+
+        rec_engine = IntelligentRecommendationEngine(dep_graph=dep_graph)
+        recommendations = rec_engine.generate_repository_recommendations(
+            profiles=predictions_res.profiles,
+            all_files=all_files
+        )
+
+        pr_analyzer = PullRequestRiskAnalyzer(
+            repo_path=repo_path,
+            model_bundle=model_bundle,
+            dep_graph=dep_graph,
+            component_profiles=predictions_res.profiles
+        )
+
+        # Step 10: 4-Way Feature Ablation Study
+        st.write("Running 4-way feature ablation research experiment...")
+        ablation_engine = FeatureAblationExperiment(random_state=RANDOM_STATE)
+        ablation_report = ablation_engine.run_ablation(dataset.split_result, algorithm=algorithm)
+
         status.update(label="Repository Analysis Complete ✓", state="complete", expanded=False)
 
     return {
@@ -134,6 +176,10 @@ def execute_repository_analysis(repo_input: str, is_demo: bool, algorithm: Class
         "comp_report": comp_report,
         "what_if_engine": what_if_engine,
         "change_analyzer": change_analyzer,
+        "health_report": health_report,
+        "recommendations": recommendations,
+        "pr_analyzer": pr_analyzer,
+        "ablation_report": ablation_report,
         "is_analyzed": True
     }
 
@@ -175,7 +221,25 @@ def main():
 
     # Route Pages
     if selected_page == NavigationPage.OVERVIEW:
-        render_overview_page(data["metadata"], data["predictions_res"], data["comp_report"])
+        render_overview_page(
+            data["metadata"],
+            data["predictions_res"],
+            data["comp_report"],
+            health_report=data.get("health_report"),
+            recommendations=data.get("recommendations")
+        )
+
+    elif selected_page == NavigationPage.HEALTH:
+        render_health_page(data.get("health_report"))
+
+    elif selected_page == NavigationPage.RECOMMENDATIONS:
+        render_recommendations_page(data.get("recommendations"), data.get("predictions_res"))
+
+    elif selected_page == NavigationPage.PR_ANALYZER:
+        render_pr_analyzer_page(data.get("pr_analyzer"), data["metadata"], data.get("git_loader"))
+
+    elif selected_page == NavigationPage.FEATURE_ABLATION:
+        render_feature_ablation_page(data.get("ablation_report"), selected_algo)
 
     elif selected_page == NavigationPage.RISK_EXPLORER:
         render_risk_explorer_page(

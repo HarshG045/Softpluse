@@ -15,15 +15,19 @@ from ml.train import ClassifierAlgorithm, TrainedModelBundle
 
 class NavigationPage(str, Enum):
     OVERVIEW = "Overview"
+    HEALTH = "Repository Health"
     RISK_EXPLORER = "Risk Explorer"
     ARCHITECTURE = "Architecture"
     EVOLUTION = "Evolution"
     ARCH_EVOLUTION = "Architecture Evolution"
     GIT_ACTIVITY = "Git Activity"
     DEPENDENCIES = "Dependencies"
+    RECOMMENDATIONS = "Recommendations"
+    PR_ANALYZER = "Pull Request Risk"
     EXPLAINABILITY = "Explainability"
     WHAT_IF_LAB = "What-If Lab"
     MODEL_EVALUATION = "Model Evaluation"
+    FEATURE_ABLATION = "Feature Ablation"
     SETTINGS = "Settings"
 
 
@@ -32,6 +36,7 @@ NAV_SECTIONS = [
         "header": "ANALYSIS",
         "items": [
             {"id": NavigationPage.OVERVIEW, "label": "Overview", "icon": "▣"},
+            {"id": NavigationPage.HEALTH, "label": "Repository Health", "icon": "♥"},
             {"id": NavigationPage.RISK_EXPLORER, "label": "Risk Explorer", "icon": "◉"},
             {"id": NavigationPage.ARCHITECTURE, "label": "Architecture", "icon": "◈"},
             {"id": NavigationPage.EVOLUTION, "label": "Evolution", "icon": "↗"},
@@ -43,6 +48,8 @@ NAV_SECTIONS = [
     {
         "header": "INTELLIGENCE",
         "items": [
+            {"id": NavigationPage.RECOMMENDATIONS, "label": "Action Recommendations", "icon": "⚡"},
+            {"id": NavigationPage.PR_ANALYZER, "label": "Pull Request Risk", "icon": "⌥"},
             {"id": NavigationPage.EXPLAINABILITY, "label": "Explainability", "icon": "✦"},
             {"id": NavigationPage.WHAT_IF_LAB, "label": "What-If Lab", "icon": "◇"},
         ]
@@ -50,7 +57,8 @@ NAV_SECTIONS = [
     {
         "header": "RESEARCH",
         "items": [
-            {"id": NavigationPage.MODEL_EVALUATION, "label": "Model Evaluation", "icon": "▤"}
+            {"id": NavigationPage.MODEL_EVALUATION, "label": "Model Evaluation", "icon": "▤"},
+            {"id": NavigationPage.FEATURE_ABLATION, "label": "Feature Ablation", "icon": "🔬"},
         ]
     },
     {

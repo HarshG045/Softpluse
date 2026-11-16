@@ -177,6 +177,70 @@ class CodeAnalyzer:
 
         return metrics
 
+    @staticmethod
+    def analyze_source_content(filepath: str, content: str) -> "CodeMetrics":
+        """Parses code metrics from a source string without reading from disk.
+
+        This enables historical snapshot analysis by parsing file contents
+        retrieved via `git show` without checking out the commit.
+        """
+        metrics = CodeMetrics(filepath=filepath.replace("\\", "/"))
+
+        if not content or not content.strip():
+            return metrics
+
+        try:
+            lines = content.splitlines()
+            metrics.loc = len([line for line in lines if line.strip() and not line.strip().startswith("#")])
+
+            comment_lines = len([line for line in lines if line.strip().startswith("#")])
+            total_lines = len(lines)
+            metrics.comment_ratio = (comment_lines / total_lines) if total_lines > 0 else 0.0
+
+            tree = ast.parse(content, filename=filepath)
+
+            # Calculate cyclomatic complexity
+            cc_visitor = CyclomaticComplexityVisitor()
+            cc_visitor.visit(tree)
+            metrics.complexity = cc_visitor.complexity
+            metrics.branches = cc_visitor.branches
+
+            # Extract classes, methods, functions, and imports
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    metrics.classes += 1
+                    for item in node.body:
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            metrics.methods += 1
+
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    metrics.functions += 1
+
+                elif isinstance(node, ast.Import):
+                    metrics.imports += len(node.names)
+                    for alias in node.names:
+                        metrics.imported_modules.add(alias.name)
+                        metrics.imported_modules.add(alias.name.split(".")[0])
+                        metrics.imported_modules.add(alias.name.split(".")[-1])
+
+                elif isinstance(node, ast.ImportFrom):
+                    metrics.imports += 1
+                    if node.module:
+                        metrics.imported_modules.add(node.module)
+                        metrics.imported_modules.add(node.module.split(".")[0])
+                        metrics.imported_modules.add(node.module.split(".")[-1])
+
+        except SyntaxError as e:
+            metrics.has_parse_error = True
+            metrics.parse_error_msg = f"Syntax error at line {e.lineno}: {e.msg}"
+            logger.debug(f"Syntax error in {filepath}: {e}")
+        except Exception as e:
+            metrics.has_parse_error = True
+            metrics.parse_error_msg = str(e)
+            logger.debug(f"Failed to parse {filepath}: {e}")
+
+        return metrics
+
     def analyze_repository(self, filepaths: Optional[List[str]] = None) -> Dict[str, CodeMetrics]:
         """
         Analyzes all Python files in the repository.
